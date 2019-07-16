@@ -72,8 +72,10 @@ class MemoryRel(nn.Module):
         inputs = torch.cat([entity1, entity2], dim=0)
         for i in range(self.hops):
             key_value = self.key_value_generators[i](inputs)
-            key_value = self.actf(key_value)
+            # key_value = torch.tanh(key_value)
             key, value = torch.chunk(key_value, 2, dim=0)
+            key = torch.tanh(key)
+            value = self.actf(value)
             mem_dist = torch.softmax(mem_bank @ key, dim=0)
             mem_representation = mem_dist @ mem_bank
             inputs = self.hidden_generators[i](torch.cat([value, mem_representation], dim=0))

@@ -15,27 +15,27 @@ class RelNetwork(nn.Module):
         self.base_encoder = base_encoder
         self.energy_temp = energy_temp
 
-    def forward(self, word, char, pos, heads, types, masks, lengths, indices, instances):
+    def forward(self, batch, batch_graph, instances):
+        word, char, pos, heads, types, masks, lengths, indices = batch
+        word_graph, char_graph, pos_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
+        first_word_start, first_word_end, second_word_start, second_word_end = instances[0]
         energy = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp)
-        word_h = self.base_encoder(word, char, pos, masks, lengths)
+        word_h = self.base_encoder(word_graph, char_graph, pos_graph, masks_graph, lengths_graph)
         if isinstance(self.graphrel, GCNRel):
             output = self.graphrel.forward(word_h, energy, mask=masks, length=lengths)
-            item = instances[0]
             # label = 1 if item['ref'] == 'True' else 0
-            first_word_hidden = output.squeeze()[item['subj_start']+1:item['subj_end']+2]
-            second_word_hidden = output.squeeze()[item['obj_start']+1:item['obj_end']+2]
+            first_word_hidden = output.squeeze()[first_word_start+1:first_word_end+1]
+            second_word_hidden = output.squeeze()[second_word_start+1:second_word_end+1]
         elif isinstance(self.graphrel, FullGraphRel):
-            item = instances[0]
             sent_len = int(masks.sum().item())
-            first_word_hidden = (word_h.squeeze()[item['subj_start']+1:item['subj_end']+2]).mean(dim=-2)
-            second_word_hidden = (word_h.squeeze()[item['obj_start']+1:item['obj_end']+2]).mean(dim=-2)
+            first_word_hidden = (word_h.squeeze()[first_word_start+1:first_word_end+1]).mean(dim=-2)
+            second_word_hidden = (word_h.squeeze()[second_word_start+1:second_word_end+1]).mean(dim=-2)
             first_word_hidden = self.graphrel(energy, word_h, first_word_hidden, second_word_hidden, sent_len)
             second_word_hidden = None
         else:
-            item = instances[0]
             sent_len = int(masks.sum().item())
-            first_word_hidden = (word_h.squeeze()[item['subj_start']+1:item['subj_end']+2]).mean(dim=-2)
-            second_word_hidden = (word_h.squeeze()[item['obj_start']+1:item['obj_end']+2]).mean(dim=-2)
+            first_word_hidden = (word_h.squeeze()[first_word_start+1:first_word_end+1]).mean(dim=-2)
+            second_word_hidden = (word_h.squeeze()[second_word_start+1:second_word_end+1]).mean(dim=-2)
             first_word_hidden = self.graphrel(energy, word_h, first_word_hidden, second_word_hidden, sent_len)
             second_word_hidden = None
         pred = self.classifier(first_word_hidden, second_word_hidden)
@@ -102,6 +102,7 @@ class BaseEncoder(nn.Module):
 
     def forward(self, input_word, input_char, input_pos, mask=None, length=None, hx=None):
         # [batch, length, word_dim]
+        # print(torch.max(input_word).cpu().item(), self.emb_word.weight.shape[0])
         word = self.emb_word(input_word)
         # apply dropout on input
         word = self.dp(word)
