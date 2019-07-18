@@ -18,27 +18,45 @@ class RelNetwork(nn.Module):
     def forward(self, batch, batch_graph, instances):
         word, char, pos, heads, types, masks, lengths, indices = batch
         word_graph, char_graph, pos_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
-        first_word_start, first_word_end, second_word_start, second_word_end = instances[0]
         energy = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp)
         word_h = self.base_encoder(word_graph, char_graph, pos_graph, masks_graph, lengths_graph)
+        first_hiddens = []
+        second_hiddens = []
         if isinstance(self.graphrel, GCNRel):
             output = self.graphrel.forward(word_h, energy, mask=masks, length=lengths)
-            # label = 1 if item['ref'] == 'True' else 0
-            first_word_hidden = output.squeeze()[first_word_start+1:first_word_end+1]
-            second_word_hidden = output.squeeze()[second_word_start+1:second_word_end+1]
+            for instance_index, instance in enumerate(instances):
+                first_word_start, first_word_end, second_word_start, second_word_end = instance
+                first_word_hidden = output[instance_index, first_word_start+1:first_word_end+1].mean(dim=-2)
+                second_word_hidden = output[instance_index, second_word_start+1:second_word_end+1].mean(dim=-2)
+                first_hiddens.append(first_word_hidden)
+                second_hiddens.append(second_word_hidden)
+            first_hiddens = torch.stack(first_hiddens, dim=0)
+            second_hiddens = torch.stack(second_hiddens, dim=0)
         elif isinstance(self.graphrel, FullGraphRel):
-            sent_len = int(masks.sum().item())
-            first_word_hidden = (word_h.squeeze()[first_word_start+1:first_word_end+1]).mean(dim=-2)
-            second_word_hidden = (word_h.squeeze()[second_word_start+1:second_word_end+1]).mean(dim=-2)
-            first_word_hidden = self.graphrel(energy, word_h, first_word_hidden, second_word_hidden, sent_len)
-            second_word_hidden = None
+            sent_len = word_h.shape[1]
+            for instance_index, instance in enumerate(instances):
+                first_word_start, first_word_end, second_word_start, second_word_end = instance
+                first_word_hidden = word_h[instance_index, first_word_start+1:first_word_end+1].mean(dim=-2)
+                second_word_hidden = word_h[instance_index, second_word_start+1:second_word_end+1].mean(dim=-2)
+                first_hiddens.append(first_word_hidden)
+                second_hiddens.append(second_word_hidden)
+            first_hiddens = torch.stack(first_hiddens, dim=0)
+            second_hiddens = torch.stack(second_hiddens, dim=0)
+            first_hiddens = self.graphrel(energy, word_h, first_hiddens, second_hiddens, sent_len)
+            second_hiddens = None
         else:
-            sent_len = int(masks.sum().item())
-            first_word_hidden = (word_h.squeeze()[first_word_start+1:first_word_end+1]).mean(dim=-2)
-            second_word_hidden = (word_h.squeeze()[second_word_start+1:second_word_end+1]).mean(dim=-2)
-            first_word_hidden = self.graphrel(energy, word_h, first_word_hidden, second_word_hidden, sent_len)
-            second_word_hidden = None
-        pred = self.classifier(first_word_hidden, second_word_hidden)
+            sent_len = word_h.shape[1]
+            for instance_index, instance in enumerate(instances):
+                first_word_start, first_word_end, second_word_start, second_word_end = instance
+                first_word_hidden = word_h[instance_index, first_word_start+1:first_word_end+1].mean(dim=-2)
+                second_word_hidden = word_h[instance_index, second_word_start+1:second_word_end+1].mean(dim=-2)
+                first_hiddens.append(first_word_hidden)
+                second_hiddens.append(second_word_hidden)
+            first_hiddens = torch.stack(first_hiddens, dim=0)
+            second_hiddens = torch.stack(second_hiddens, dim=0)
+            first_hiddens = self.graphrel(energy, word_h, first_hiddens, second_hiddens, sent_len)
+            second_hiddens = None
+        pred = self.classifier(first_hiddens, second_hiddens)
         return pred
 
 class MeanPoolClassifier(nn.Module):
@@ -50,9 +68,7 @@ class MeanPoolClassifier(nn.Module):
 
     def forward(self, tensor_0, tensor_1=None):
         if tensor_1 is not None: # graphrel
-            tensor_mean_0 = torch.mean(tensor_0, dim=-2)
-            tensor_mean_1 = torch.mean(tensor_1, dim=-2)
-            features = torch.cat((tensor_mean_0, tensor_mean_1), dim=-1)
+            features = torch.cat((tensor_0, tensor_1), dim=-1)
         else: # mem rel
             features = tensor_0
         logprobs = torch.log_softmax(self.linear(features), dim=-1)
@@ -78,7 +94,8 @@ class GCN(nn.Module):
 
     def forward(self, inp, adj, is_relu=True):
         out = torch.matmul(inp, self.W) + self.b
-        # out = torch.matmul(adj, out)
+        if adj is not None:
+            out = torch.matmul(adj, out)
         if is_relu == True:
             out = nn.functional.relu(out)
         return out
@@ -143,7 +160,7 @@ class BaseEncoder(nn.Module):
         return output
 
 class GCNRel(nn.Module):
-    def __init__(self, mxl, num_rel, num_dep_rels=0, hid_size=256, rnn_layer=2, gcn_layer=2, dp=0.5,  dep_rel_emb_size=15):
+    def __init__(self, mxl, num_rel, num_dep_rels=0, hid_size=256, rnn_layer=2, gcn_layer=2, dp=0.5, dep_rel_emb_size=15):
         super(GCNRel, self).__init__()
 
         self.mxl = mxl
@@ -155,9 +172,10 @@ class GCNRel(nn.Module):
 
         self.emb_dep_rel = nn.Embedding(num_dep_rels, dep_rel_emb_size)
 
-        self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) for i in range(self.gcn_layer)])
-        self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) for i in range(self.gcn_layer)])
-
+        self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) if i == 0 else
+                                     GCN(self.hid_size, self.hid_size) for i in range(self.gcn_layer)])
+        self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) if i == 0 else
+                                     GCN(self.hid_size, self.hid_size) for i in range(self.gcn_layer)])
         self.dp = nn.Dropout(dp)
 
     def output(self, feat):
@@ -193,32 +211,35 @@ class GCNRel(nn.Module):
         dep_probs = dep_probs.permute(0, 2, 3, 1)  # batch, head, dep, labels
         marginal_rel_probs = dep_probs.sum(dim=3)  # batch, head, dep
 
+        out_fw, out_bw = 0, 0
+        dep_fw = marginal_rel_probs + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
+        dep_bw = marginal_rel_probs.transpose(1, 2) + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
+
         for i in range(self.gcn_layer):
+            if i == 0:
+                # word_h = word_h.transpose(1, 2)
 
-            word_h = word_h.transpose(1, 2)
+                weighted_sum_of_labels = dep_probs @ self.emb_dep_rel.weight # batch, head, dep, dep rel embs
 
-            weighted_sum_of_labels = dep_probs @ self.emb_dep_rel.weight # batch, head, dep, dep rel embs
+                # weighted_sum_of_hiddens_deps = torch.bmm(word_h, marginal_rel_probs).transpose(1, 2) # batch, deps, hiddens
+                # weighted_sum_of_hiddens_heads = torch.bmm(word_h, marginal_rel_probs.permute(0, 2, 1)).transpose(1, 2) # batch, heads, hiddens
 
-            weighted_sum_of_hiddens_deps = torch.bmm(word_h, marginal_rel_probs).transpose(1, 2) # batch, deps, hiddens
-            weighted_sum_of_hiddens_heads = torch.bmm(word_h, marginal_rel_probs.permute(0, 2, 1)).transpose(1, 2) # batch, heads, hiddens
+                weighted_sum_of_labels_deps = torch.sum(weighted_sum_of_labels, dim=1)
+                weighted_sum_of_labels_heads = torch.sum(weighted_sum_of_labels, dim=2)
 
-            weighted_sum_of_labels_deps = torch.sum(weighted_sum_of_labels, dim=1)
-            weighted_sum_of_labels_heads = torch.sum(weighted_sum_of_labels, dim=2)
+                weighted_sum_m_deps = torch.cat((word_h, weighted_sum_of_labels_deps), dim=2) # batch, deps, hiddens
+                weighted_sum_m_heads = torch.cat((word_h, weighted_sum_of_labels_heads), dim=2) # batch, heads, hiddens
+                # print(weighted_sum_m_deps.shape)
 
-            weighted_sum_m_deps = torch.cat((weighted_sum_of_hiddens_deps, weighted_sum_of_labels_deps), dim=2) # batch, deps, hiddens
-            weighted_sum_m_heads = torch.cat((weighted_sum_of_hiddens_heads, weighted_sum_of_labels_heads), dim=2) # batch, heads, hiddens
-            # print(weighted_sum_m_deps.shape)
-            length = weighted_sum_m_deps.shape[1]
-            ave_prob = 1 / length
+                out_fw = weighted_sum_m_heads
+                out_bw = weighted_sum_m_deps
 
-            dep_fw_bw = torch.full((length, length), ave_prob).to(weighted_sum_m_deps.device)
-
-            out_fw = weighted_sum_m_heads
-            out_bw = weighted_sum_m_deps
-
-            out_fw = self.gcn_fw[i](out_fw, dep_fw_bw)
-            out_bw = self.gcn_bw[i](out_bw, dep_fw_bw)
-
+                out_fw = self.gcn_fw[i](out_fw, dep_fw)
+                out_bw = self.gcn_bw[i](out_bw, dep_bw)
+            else:
+                out_fw = self.gcn_fw[i](out_fw, dep_fw)
+                out_bw = self.gcn_bw[i](out_bw, dep_bw)
+        else:
             out = torch.cat([out_fw, out_bw], dim=2)
             word_h = self.dp(out)
             # print(word_h.shape)

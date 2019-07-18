@@ -59,21 +59,21 @@ def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, custo
     word_alphabet, graph_word_alphabet = word_alphabets
     char_alphabet, graph_char_alphabet = char_alphabets
 
-    data_train = conllx_data.read_data_to_tensor(parser_training_fn, word_alphabet, char_alphabet, pos_alphabet,
+    data_train = conllx_data.read_data_to_tensor_dicts(parser_training_fn, word_alphabet, char_alphabet, pos_alphabet,
                                                  type_alphabet,
                                                  symbolic_root=True, device=custom_args.device)
-    data_dev = conllx_data.read_data_to_tensor(parser_dev_fn, word_alphabet, char_alphabet, pos_alphabet, type_alphabet,
+    data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, word_alphabet, char_alphabet, pos_alphabet, type_alphabet,
                                                symbolic_root=True, device=custom_args.device)
-    data_test = conllx_data.read_data_to_tensor(parser_test_fn, word_alphabet, char_alphabet, pos_alphabet,
+    data_test = conllx_data.read_data_to_tensor_dicts(parser_test_fn, word_alphabet, char_alphabet, pos_alphabet,
                                                 type_alphabet,
                                                 symbolic_root=True, device=custom_args.device)
 
-    graph_data_train = conllx_data.read_data_to_tensor(parser_training_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
+    graph_data_train = conllx_data.read_data_to_tensor_dicts(parser_training_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
                                                  type_alphabet,
                                                  symbolic_root=True, device=custom_args.device, normalize_digits=False)
-    graph_data_dev = conllx_data.read_data_to_tensor(parser_dev_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet, type_alphabet,
+    graph_data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet, type_alphabet,
                                                symbolic_root=True, device=custom_args.device, normalize_digits=False)
-    graph_data_test = conllx_data.read_data_to_tensor(parser_test_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
+    graph_data_test = conllx_data.read_data_to_tensor_dicts(parser_test_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
                                                 type_alphabet,
                                                 symbolic_root=True, device=custom_args.device, normalize_digits=False)
 
