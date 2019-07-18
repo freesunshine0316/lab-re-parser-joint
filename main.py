@@ -16,8 +16,9 @@ from sklearn.metrics import precision_recall_fscore_support
 from eval_helper import get_eval_metrics
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--joint-training', default=False, action='store_true')
 parser.add_argument('--base-lr', default=1e-6, type=float)
-parser.add_argument('--batch-size', default=1, type=int)
+parser.add_argument('--batch-size', default=4, type=int)
 parser.add_argument('--training-epochs', default=20, type=int)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
 
@@ -29,6 +30,7 @@ parser.add_argument('--memory-energy-threshold', default=1e-6, type=float)
 
 parser.add_argument('--base-encoder-char-emb-size', default=50, type=int)
 parser.add_argument('--base-encoder-hidden-size', default=300, type=int)
+parser.add_argument('--base-encoder-no-word-emb-tuning', default=False, action='store_true')
 parser.add_argument('--energy-temp', default=1., type=float) # smaller for peakier distribution
 parser.add_argument('--base-encoder-num-filters', default=300, type=int)
 parser.add_argument('--base-encoder-kernel-size', default=3, type=int)
@@ -143,6 +145,10 @@ if custom_args.bio_embeddings != 'none':
 else:
     word_embs = torch.nn.Embedding(graph_word_alphabet.size(), 200)
 
+if custom_args.base_encoder_no_word_emb_tuning:
+    word_embs = word_embs.weight.data
+    word_embs.requires_grad_(False)
+
 pos_embs = copy.deepcopy(network.pos_embedd)
 num_dep_rels = type_alphabet.size()
 # word_embs = network.word_embedd
@@ -170,9 +176,14 @@ else:
 total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp)
 total_net = total_net.to(custom_args.device)
 
-parser_optimizer = torch.optim.SGD(network.parameters(), lr=1e-6)
-top_net_optimizer = torch.optim.Adam(list(classifier.parameters())+list(graphrel_net.parameters())
-                                     +list(base_encoder.parameters()))
+optimizers = []
+if not custom_args.joint_training:
+    optimizers.append(torch.optim.SGD(network.parameters(), lr=custom_args.base_lr))
+    optimizers.append( torch.optim.Adam(list(classifier.parameters())+list(graphrel_net.parameters())
+                                     +list(base_encoder.parameters())))
+else:
+    optimizers.append( torch.optim.Adam(list(classifier.parameters())+list(graphrel_net.parameters())
+                                     +list(base_encoder.parameters())+list(network.parameters()) ))
 
 # network.eval()
 training_epochs = custom_args.training_epochs
@@ -201,7 +212,7 @@ for tepoch in range(training_epochs):
     gold_labels_with_none = []
     i = 0
     train_loss = 0
-    for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_train,graph_data_train, batch_size, shuffle=True):
+    for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_train, graph_data_train, batch_size, shuffle=True):
         word, char, pos, heads, types, masks, lengths, indices = batch
         instances = []
         this_labels = []
@@ -229,10 +240,10 @@ for tepoch in range(training_epochs):
 
         loss.backward()
         train_loss += loss.item()
-        top_net_optimizer.step()
-        parser_optimizer.step()
-        top_net_optimizer.zero_grad()
-        parser_optimizer.zero_grad()
+        for optimizer in optimizers:
+            optimizer.step()
+        for optimizer in optimizers:
+            optimizer.zero_grad()
         print('epoch {} iter {} | loss {} | corr? {}'.format(tepoch, i, loss.item(), this_true), file=logger_detail)
         i += 1
         if custom_args.debug and i > 10: break
@@ -280,8 +291,8 @@ for tepoch in range(training_epochs):
             dev_loss += loss.item()
             if custom_args.debug and dev_total > 10: break
         prec, rec, f1, _ = precision_recall_fscore_support(gold_labels, predicted_labels, average='micro')
-        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(-dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger_detail)
-        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(-dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger)
+        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger_detail)
+        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger)
         print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
         if f1 > best_dev_f1:
             fn = 'e{}.tch'.format(tepoch)
