@@ -20,6 +20,7 @@ parser.add_argument('--joint-training', default=False, action='store_true')
 parser.add_argument('--base-lr', default=1e-6, type=float)
 parser.add_argument('--batch-size', default=4, type=int)
 parser.add_argument('--training-epochs', default=20, type=int)
+parser.add_argument('--unk-p', default=.2, type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
 
 parser.add_argument('--graph-conv-num-filters', default=200, type=int)
@@ -146,8 +147,8 @@ else:
     word_embs = torch.nn.Embedding(graph_word_alphabet.size(), 200)
 
 if custom_args.base_encoder_no_word_emb_tuning:
-    word_embs = word_embs.weight.data
-    word_embs.requires_grad_(False)
+    for param in word_embs.parameters():
+        param.requires_grad = False
 
 pos_embs = copy.deepcopy(network.pos_embedd)
 num_dep_rels = type_alphabet.size()
@@ -179,11 +180,11 @@ total_net = total_net.to(custom_args.device)
 optimizers = []
 if not custom_args.joint_training:
     optimizers.append(torch.optim.SGD(network.parameters(), lr=custom_args.base_lr))
-    optimizers.append( torch.optim.Adam(list(classifier.parameters())+list(graphrel_net.parameters())
-                                     +list(base_encoder.parameters())))
+    optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
+                                     +list(base_encoder.parameters()) if x.requires_grad ]))
 else:
-    optimizers.append( torch.optim.Adam(list(classifier.parameters())+list(graphrel_net.parameters())
-                                     +list(base_encoder.parameters())+list(network.parameters()) ))
+    optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
+                                     +list(base_encoder.parameters())+list(network.parameters()) if x.requires_grad]))
 
 # network.eval()
 training_epochs = custom_args.training_epochs
@@ -220,7 +221,13 @@ for tepoch in range(training_epochs):
             instances.append(mentions_train[index.item()])
             this_labels.append(labels_train[index.item()])
         this_labels = torch.tensor(this_labels)
+
+        graph_words = graph_batch[0]
+        graph_words = datasets.unk_single_mentions(graph_words, instances, custom_args.unk_p)
+        graph_batch = (graph_words, *(graph_batch[1:]))
+
         pred = total_net.forward(batch, graph_batch, instances)
+
 
         train_total += len(instances)
         predicted_label = torch.argmax(pred, dim=1).cpu()

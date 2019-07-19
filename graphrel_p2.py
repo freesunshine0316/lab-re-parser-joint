@@ -109,10 +109,7 @@ class BaseEncoder(nn.Module):
         super(BaseEncoder, self).__init__()
         # base encoder structures
         self.emb_pos = emb_pos
-        if isinstance(emb_word, torch.Tensor):
-            self.register_buffer('emb_word', emb_word)
-        else:
-            self.emb_word = emb_word
+        self.emb_word = emb_word
         self.emb_char = emb_char
         char_dim = self.emb_char.embedding_dim
         self.conv1d = nn.Conv1d(char_dim, num_filters, kernel_size, padding=kernel_size - 1)
@@ -123,10 +120,8 @@ class BaseEncoder(nn.Module):
     def forward(self, input_word, input_char, input_pos, mask=None, length=None, hx=None):
         # [batch, length, word_dim]
         # print(torch.max(input_word).cpu().item(), self.emb_word.weight.shape[0])
-        if isinstance(self.emb_word, torch.Tensor):
-            word = self.emb_word[input_word]
-        else:
-            word = self.emb_word(input_word)
+
+        word = self.emb_word(input_word)
         # apply dropout on input
         word = self.dp(word)
 

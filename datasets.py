@@ -67,7 +67,6 @@ def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, custo
     data_test = conllx_data.read_data_to_tensor_dicts(parser_test_fn, word_alphabet, char_alphabet, pos_alphabet,
                                                 type_alphabet,
                                                 symbolic_root=True, device=custom_args.device)
-
     graph_data_train = conllx_data.read_data_to_tensor_dicts(parser_training_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
                                                  type_alphabet,
                                                  symbolic_root=True, device=custom_args.device, normalize_digits=False)
@@ -85,3 +84,13 @@ def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, custo
            (graph_data_train, graph_data_dev, graph_data_test), \
            (train_mentions, dev_mentions, test_mentions), \
            (train_labels, dev_labels, test_labels)
+
+import random
+
+def unk_single_mentions(graph_words, mentions, p=0.2):
+    for index, (b1, e1, b2, e2) in enumerate(mentions):
+        if e1 - b1 == 1:
+            if random.random() < p: graph_words[index, b1+1:e1+1] = 0
+        if e2 - b2 == 1:
+            if random.random() < p: graph_words[index, b2+1:e2+1] = 0
+    return graph_words
