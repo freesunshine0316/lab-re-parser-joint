@@ -21,7 +21,10 @@ parser.add_argument('--base-lr', default=1e-6, type=float)
 parser.add_argument('--batch-size', default=4, type=int)
 parser.add_argument('--training-epochs', default=20, type=int)
 parser.add_argument('--unk-p', default=.2, type=float)
+parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
+
+parser.add_argument('--parser-freeze-embs', default=False, action='store_true') # freeze parser embeddings
 
 parser.add_argument('--graph-conv-num-filters', default=200, type=int)
 parser.add_argument('--filter-factory-hidden', default=300, type=int)
@@ -179,12 +182,13 @@ total_net = total_net.to(custom_args.device)
 
 optimizers = []
 if not custom_args.joint_training:
-    optimizers.append(torch.optim.SGD(network.parameters(), lr=custom_args.base_lr))
+    optimizers.append(torch.optim.SGD(network.parameters(), lr=custom_args.base_lr, weight_decay=custom_args.l2))
     optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
-                                     +list(base_encoder.parameters()) if x.requires_grad ]))
+                                     +list(base_encoder.parameters()) if x.requires_grad ], weight_decay=custom_args.l2))
 else:
     optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
-                                     +list(base_encoder.parameters())+list(network.parameters()) if x.requires_grad]))
+                                     +list(base_encoder.parameters())+list(network.parameters()) if x.requires_grad],
+                                        weight_decay=custom_args.l2))
 
 # network.eval()
 training_epochs = custom_args.training_epochs
@@ -213,6 +217,9 @@ for tepoch in range(training_epochs):
     gold_labels_with_none = []
     i = 0
     train_loss = 0
+    ref_num_no_none = 0
+    out_num_no_none = 0
+    corr_num_no_none = 0
     for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_train, graph_data_train, batch_size, shuffle=True):
         word, char, pos, heads, types, masks, lengths, indices = batch
         instances = []
@@ -242,6 +249,12 @@ for tepoch in range(training_epochs):
             if this_labels[label_index] != 0 or predicted_label[label_index] != 0:
                 gold_labels.append(this_labels[label_index].item())
                 predicted_labels.append(predicted_label[label_index].item())
+            if this_labels[label_index] != 0:
+                ref_num_no_none += 1
+            if predicted_label[label_index] != 0:
+                out_num_no_none += 1
+                if this_labels[label_index] == predicted_label[label_index]:
+                    corr_num_no_none += 1
 
         loss = loss_func(pred, this_labels.to(pred.device))
 
@@ -259,6 +272,10 @@ for tepoch in range(training_epochs):
                                                                           rec, f1), file=logger)
     print('>> train | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(train_loss, train_corr / train_total, prec,
                                                                           rec, f1), file=logger_detail)
+    self_prec = 0 if out_num_no_none == 0 else corr_num_no_none / out_num_no_none
+    self_rec = 0 if ref_num_no_none == 0 else corr_num_no_none / ref_num_no_none
+    self_f1 =  2*self_prec*self_rec/(self_prec+self_rec+1e-8)
+    print('>> train | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1), file=logger)
     print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
 
     with torch.no_grad():
@@ -269,6 +286,9 @@ for tepoch in range(training_epochs):
         total_net.eval()
         predicted_labels_with_none = []
         gold_labels_with_none = []
+        ref_num_no_none = 0
+        out_num_no_none = 0
+        corr_num_no_none = 0
         for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_dev, graph_data_dev, batch_size):
             word, char, pos, heads, types, masks, lengths, indices = batch
             # else:
@@ -293,6 +313,12 @@ for tepoch in range(training_epochs):
                 if this_labels[label_index] != 0 or predicted_label[label_index] != 0:
                     gold_labels.append(this_labels[label_index].item())
                     predicted_labels.append(predicted_label[label_index].item())
+                if this_labels[label_index] != 0:
+                    ref_num_no_none += 1
+                if predicted_label[label_index] != 0:
+                    out_num_no_none += 1
+                    if this_labels[label_index] == predicted_label[label_index]:
+                        corr_num_no_none += 1
 
             loss = loss_func(pred, this_labels.to(pred.device))
             dev_loss += loss.item()
@@ -300,6 +326,11 @@ for tepoch in range(training_epochs):
         prec, rec, f1, _ = precision_recall_fscore_support(gold_labels, predicted_labels, average='micro')
         print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger_detail)
         print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger)
+        self_prec = 0 if out_num_no_none == 0 else corr_num_no_none / out_num_no_none
+        self_rec = 0 if ref_num_no_none == 0 else  corr_num_no_none / ref_num_no_none
+        self_f1 = 2 * self_prec * self_rec / (self_prec + self_rec + 1e-8)
+        print('>> dev | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1),
+              file=logger)
         print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
         if f1 > best_dev_f1:
             fn = 'e{}.tch'.format(tepoch)
