@@ -18,16 +18,13 @@ from eval_helper import get_eval_metrics
 parser = argparse.ArgumentParser()
 parser.add_argument('--joint-training', default=False, action='store_true')
 parser.add_argument('--base-lr', default=1e-6, type=float)
-parser.add_argument('--batch-size', default=4, type=int)
-parser.add_argument('--training-epochs', default=20, type=int)
+parser.add_argument('--batch-size', default=6, type=int)
+parser.add_argument('--training-epochs', default=50, type=int)
 parser.add_argument('--unk-p', default=.2, type=float)
 parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
 
 parser.add_argument('--parser-freeze-embs', default=False, action='store_true') # freeze parser embeddings
-
-parser.add_argument('--graph-conv-num-filters', default=200, type=int)
-parser.add_argument('--filter-factory-hidden', default=300, type=int)
 
 parser.add_argument('--rel-model-dp', default=0.3, type=float)
 parser.add_argument('--memory-energy-threshold', default=1e-6, type=float)
@@ -35,12 +32,21 @@ parser.add_argument('--memory-energy-threshold', default=1e-6, type=float)
 parser.add_argument('--base-encoder-char-emb-size', default=50, type=int)
 parser.add_argument('--base-encoder-hidden-size', default=300, type=int)
 parser.add_argument('--base-encoder-no-word-emb-tuning', default=False, action='store_true')
+parser.add_argument('--base-encoder-train-random-embs', default=False, action='store_true')
 parser.add_argument('--energy-temp', default=1., type=float) # smaller for peakier distribution
 parser.add_argument('--base-encoder-num-filters', default=300, type=int)
 parser.add_argument('--base-encoder-kernel-size', default=3, type=int)
 parser.add_argument('--base-encoder-dp', default=0.3, type=float)
+
+parser.add_argument('--shared-conv-filters', default=0, type=int)
+parser.add_argument('--shared-conv-flag', default=False, action='store_true')
+parser.add_argument('--private-conv-filters', default=200, type=int)
+parser.add_argument('--filter-factory-hidden', default=300, type=int)
+
 parser.add_argument('--dep-rel-emb-size', default=15, type=int)
+
 parser.add_argument('--positive-alpha', default=1, type=float)
+parser.add_argument('--parser-return-scores', default=False, action='store_true')
 parser.add_argument('--eval-test', default=False, action='store_true')
 parser.add_argument('--saved-folder', default='default')
 
@@ -104,6 +110,11 @@ network.load_state_dict(parser)
 
 #------------------------create data specific alphabets
 
+if custom_args.parser_freeze_embs:
+    network.word_embedd.weight.requires_grad = False
+    network.pos_embedd.weight.requires_grad = False
+    network.char_embedd.weight.requires_grad = False
+
 print("Creating graph classifier Alphabets")
 alphabet_path = custom_args.graph_alphabet_folder
 train_path, dev_path, test_path, _, _, _ = datasets.DATASET_FILES[custom_args.dataset_name]
@@ -145,7 +156,12 @@ labels_dev = [label_mapper[x.lower()] for x in labels_dev]
 labels_test = [label_mapper[x.lower()] for x in labels_test]
 
 if custom_args.bio_embeddings != 'none':
-    word_embs = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
+    word_embs, grad_mask = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
+    if custom_args.base_encoder_train_random_embs:
+        grad_mask = grad_mask.to(custom_args.device)
+        def masking_grad(gr):
+            return gr*grad_mask
+        word_embs.weight.register_hook(masking_grad)
 else:
     word_embs = torch.nn.Embedding(graph_word_alphabet.size(), 200)
 
@@ -154,6 +170,7 @@ if custom_args.base_encoder_no_word_emb_tuning:
         param.requires_grad = False
 
 pos_embs = copy.deepcopy(network.pos_embedd)
+pos_embs.requires_grad = True
 num_dep_rels = type_alphabet.size()
 # word_embs = network.word_embedd
 char_embs = nn.Embedding(num_embeddings=graph_char_alphabet.size(), embedding_dim=custom_args.base_encoder_char_emb_size)
@@ -162,20 +179,22 @@ mxl = 100
 base_encoder = BaseEncoder(hid_size=custom_args.base_encoder_hidden_size, emb_pos=pos_embs, emb_word=word_embs, emb_char=char_embs,
                            kernel_size=custom_args.base_encoder_kernel_size, num_filters=custom_args.base_encoder_num_filters,
                            num_rnn_encoder_layers=3, p_rnn=(0.33, 0.33), dp=custom_args.base_encoder_dp)
+
 if custom_args.rel_model == 'memory':
     graphrel_net = MemoryRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
                              energy_threshold=custom_args.memory_energy_threshold)
 elif custom_args.rel_model == 'graph_conv':
     graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
-                                num_filters=custom_args.graph_conv_num_filters,
-                                filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp)
+                                num_filters=custom_args.private_conv_filters,
+                                filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp
+                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters)
 else:
     graphrel_net = GCNRel(mxl, 2, num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp)
 
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
 else:
-    classifier = MeanPoolClassifier(custom_args.graph_conv_num_filters, n_classes=len(all_labels))
+    classifier = MeanPoolClassifier(custom_args.shared_conv_filters+custom_args.private_conv_filters, n_classes=len(all_labels))
 
 total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp)
 total_net = total_net.to(custom_args.device)
@@ -233,7 +252,7 @@ for tepoch in range(training_epochs):
         graph_words = datasets.unk_single_mentions(graph_words, instances, custom_args.unk_p)
         graph_batch = (graph_words, *(graph_batch[1:]))
 
-        pred = total_net.forward(batch, graph_batch, instances)
+        pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores)
 
 
         train_total += len(instances)
@@ -298,7 +317,7 @@ for tepoch in range(training_epochs):
                 instances.append(mentions_dev[index.item()])
                 this_labels.append(labels_dev[index.item()])
             this_labels = torch.tensor(this_labels)
-            pred = total_net.forward(batch, graph_batch, instances)
+            pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores)
 
             dev_total += len(instances)
             predicted_label = torch.argmax(pred, dim=1).cpu()
@@ -353,7 +372,7 @@ for tepoch in range(training_epochs):
                     instances.append(mentions_test[index.item()])
                     this_labels.append(labels_test[index.item()])
                 this_labels = torch.tensor(this_labels)
-                pred = total_net.forward(batch, graph_batch, instances)
+                pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores)
 
                 test_total += len(instances)
                 predicted_label = torch.argmax(pred, dim=1).cpu()

@@ -130,7 +130,8 @@ class BiRecurrentConvBiAffine(nn.Module):
         out_arc = self.attention(arc[0], arc[1], mask_d=mask, mask_e=mask).squeeze(dim=1)
         return out_arc, type, mask, length
 
-    def get_probs(self, input_word, input_char, input_pos, mask=None, length=None, hx=None, energy_temp=1.):
+    def get_probs(self, input_word, input_char, input_pos, mask=None, length=None, hx=None, energy_temp=1.,
+                  use_scores=False):
         # almost the same as decode mst as we do not have to decode it
         # batch, arc labels, head, dependent
         # the energy is P( head, label | dependent)
@@ -159,12 +160,16 @@ class BiRecurrentConvBiAffine(nn.Module):
             minus_mask = (1 - mask) * minus_inf
             out_arc = out_arc + minus_mask.unsqueeze(2) + minus_mask.unsqueeze(1)
 
+        if use_scores:
+            return out_arc.unsqueeze(1) + out_type.permute(0, 3, 1, 2)
+
         # loss_arc shape [batch, length, length]
         loss_arc = F.log_softmax(out_arc, dim=1)
         # loss_arc_2 = F.log_softmax(out_arc.flatten(), dim=0).reshape(out_arc.shape)
         # loss_type shape [batch, length, length, num_labels]
         loss_type = F.log_softmax(out_type, dim=3).permute(0, 3, 1, 2)
         # [batch, num_labels, length, length]
+
         if energy_temp == 1:
             energy = torch.exp(loss_arc.unsqueeze(1) + loss_type)
         else:

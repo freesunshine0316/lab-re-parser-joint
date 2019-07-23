@@ -23,16 +23,21 @@ def load_word_embedding_vocab(zipped_word_embedding_file):
     return words
 
 def load_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab):
+    embedding_size = 200
     useful_indices = [-1]
+    pretrained_mask = [torch.ones((embedding_size,))]
     for word in data_vocab.instances:
         if word in embedding_vocab:
             useful_indices.append(embedding_vocab[word])
+            pretrained_mask.append(torch.zeros((embedding_size,)))
         elif word.lower() in embedding_vocab:
             useful_indices.append(embedding_vocab[word.lower()])
+            pretrained_mask.append(torch.zeros((embedding_size,)))
         else:
             useful_indices.append(-1)
+            pretrained_mask.append(torch.ones((embedding_size,)))
     vals = numpy.array(useful_indices)
-    embeddings = torch.nn.Embedding(len(useful_indices), 200) # 200 is the size of the bio embeddings
+    embeddings = torch.nn.Embedding(len(useful_indices), embedding_size) # 200 is the size of the bio embeddings
     with zipfile.ZipFile(zipped_word_embedding_file) as myzip:
         with myzip.open('bioasq.pubmed.200d.txt', 'r') as embfh:
             for index, line in enumerate(embfh):
@@ -41,7 +46,8 @@ def load_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab
                     this_embedding = torch.tensor([float(x) for x in line.decode('utf8').strip().split(' ')])
                     for i_index in ii:
                         embeddings.weight.data[i_index].copy_(this_embedding)
-    return embeddings
+    pretrained_mask = torch.stack(pretrained_mask, dim=0)
+    return embeddings, pretrained_mask
 
 
 DATASET_FILES = {

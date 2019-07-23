@@ -15,10 +15,11 @@ class RelNetwork(nn.Module):
         self.base_encoder = base_encoder
         self.energy_temp = energy_temp
 
-    def forward(self, batch, batch_graph, instances):
+    def forward(self, batch, batch_graph, instances, use_scores=False):
         word, char, pos, heads, types, masks, lengths, indices = batch
         word_graph, char_graph, pos_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
-        energy = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp)
+        energy = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp,
+                                       use_scores=use_scores)
         word_h = self.base_encoder(word_graph, char_graph, pos_graph, masks_graph, lengths_graph)
         first_hiddens = []
         second_hiddens = []

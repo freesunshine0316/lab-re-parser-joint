@@ -24,22 +24,27 @@ class FilterFactory(nn.Module):
         return output1
 
 class FullGraphRel(nn.Module):
-    def __init__(self, num_dep_rels, dep_rel_emb_size=15, in_size=256, dp=0.5
-                 , num_filters=200, filter_size=(3, 3), filter_factory_hidden=500):
+    def __init__(self, num_dep_rels, dep_rel_emb_size=15, in_size=256, dp=0.5, num_filters=200, filter_size=(3, 3),
+                 filter_factory_hidden=300, shared_conv_flag=False, shared_conv_filters=0):
         super(FullGraphRel, self).__init__()
         self.arc_composer = nn.Linear(in_size*4 + dep_rel_emb_size, in_size) # head rel dep
         self.num_filters = num_filters
         self.filter_size = filter_size
-        self.filter_depth = in_size*2
         self.filter_factory = FilterFactory(in_size*4, filter_factory_hidden, num_filters, filter_size[0], filter_size[1],
                                             in_size, dp=dp)
+        self.shared_conv_flag = shared_conv_flag
+        self.num_shared_filters = shared_conv_filters
+        if self.shared_conv_flag:
+            self.shared_conv_filters = torch.rand(self.num_shared_filters, in_size,  filter_size[0], filter_size[1])
+            torch.nn.init.kaiming_normal_(self.shared_conv_filters)
+            self.shared_conv_filters = nn.Parameter(self.shared_conv_filters)
         rel_embs = torch.rand(num_dep_rels, dep_rel_emb_size) # the weight, not the embedding module
         torch.nn.init.kaiming_normal_(rel_embs)
         self.rel_embs = torch.nn.Parameter(rel_embs)
         self.actf = nn.LeakyReLU()
         self.dp = nn.Dropout(dp)
         self.maxpool = nn.AdaptiveMaxPool1d(1)
-        self.input_transform = nn.Linear(in_size*4, num_filters)
+        self.input_transform = nn.Linear(self.num_filters+self.num_shared_filters, self.num_filters+self.num_shared_filters)
 
     def forward(self, energy, word_h, e1, e2, sent_len):
 
@@ -68,15 +73,23 @@ class FullGraphRel(nn.Module):
         inputs = torch.cat([entity1, entity2], dim=-1)
         filter = self.filter_factory(inputs)
         results = []
+        if self.shared_conv_flag:
+            shared_results = nn.functional.conv2d(mem_bank, self.shared_conv_filters)
         for i in range(filter.shape[0]):
             results.append( nn.functional.conv2d(mem_bank[i].unsqueeze(0), filter[i]))
         results = torch.stack(results, dim=0)
         result = self.dp(self.actf(results))
-
         result = result.reshape(inputs.shape[0], self.num_filters, -1)
         result = self.maxpool(result).squeeze(-1)
-        transformed_input = self.dp(self.actf(self.input_transform(inputs)))
-        return result + transformed_input
+
+        if self.shared_conv_flag:
+            shared_results = self.dp(self.actf(shared_results))
+            shared_results = shared_results.reshape(inputs.shape[0], self.num_shared_filters, -1)
+            shared_results = self.maxpool(shared_results).squeeze(-1)
+            result = torch.cat([shared_results, result], dim=-1)
+        # transformed_input = self.dp(self.actf(self.input_transform(inputs)))
+        result = self.input_transform(result)
+        return result # + transformed_input
 
 def combine_two_tensors(X, Y):
     X1 = X.unsqueeze(1)
