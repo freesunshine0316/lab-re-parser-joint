@@ -359,7 +359,7 @@ for tepoch in range(training_epochs):
         if f1 > best_dev_f1:
             fn = 'e{}.tch'.format(tepoch)
             full_fn = os.path.join(saved_folder, fn)
-            if tepoch > 10:
+            if tepoch > 7:
                 torch.save(total_net.state_dict(), full_fn)
             best_dev_f1 = f1
 

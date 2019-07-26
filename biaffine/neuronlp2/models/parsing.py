@@ -175,7 +175,7 @@ class BiRecurrentConvBiAffine(nn.Module):
         else:
             energy = (loss_arc.unsqueeze(1) + loss_type) / energy_temp
             energy = energy.exp()
-            energy = nn.functional.normalize(energy, p=1, dim=1)
+            energy = nn.functional.normalize(energy.reshape(energy.shape[0], -1, energy.shape[-1]), p=1, dim=1).reshape(energy.shape)
         # energy_2 = torch.exp(loss_arc_2.unsqueeze(1) + loss_type)
         if get_mst_tree:
             return energy, parser.decode_MST(energy.detach().cpu().numpy(), length, leading_symbolic=leading_symbolic, labeled=True)
