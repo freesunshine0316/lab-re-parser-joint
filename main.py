@@ -25,6 +25,8 @@ parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
 
 parser.add_argument('--parser-freeze-embs', default=False, action='store_true') # freeze parser embeddings
+parser.add_argument('--parser-one-best', default=False, action='store_true')
+parser.add_argument('--parser-freeze-all', default=False, action='store_true')
 
 parser.add_argument('--rel-model-dp', default=0.3, type=float)
 parser.add_argument('--memory-energy-threshold', default=1e-6, type=float)
@@ -51,7 +53,7 @@ parser.add_argument('--eval-test', default=False, action='store_true')
 parser.add_argument('--saved-folder', default='default')
 
 parser.add_argument('--device', default='cuda')
-parser.add_argument('--dataset_name', default='cpr')
+parser.add_argument('--dataset-name', default='cpr')
 parser.add_argument('--bio-embeddings', default='bioasq.zip')
 parser.add_argument('--graph-alphabet-folder', default='graph_alphabets')
 
@@ -114,6 +116,9 @@ if custom_args.parser_freeze_embs:
     network.word_embedd.weight.requires_grad = False
     network.pos_embedd.weight.requires_grad = False
     network.char_embedd.weight.requires_grad = False
+elif custom_args.parser_freeze_all:
+    for param in network.parameters():
+        param.requires_grad = False
 
 print("Creating graph classifier Alphabets")
 alphabet_path = custom_args.graph_alphabet_folder
@@ -189,7 +194,7 @@ elif custom_args.rel_model == 'graph_conv':
                                 filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp
                                 , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters)
 else:
-    graphrel_net = GCNRel(mxl, 2, num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp)
+    graphrel_net = GCNRel(num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp)
 
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
@@ -201,7 +206,7 @@ total_net = total_net.to(custom_args.device)
 
 optimizers = []
 if not custom_args.joint_training:
-    optimizers.append(torch.optim.SGD(network.parameters(), lr=custom_args.base_lr, weight_decay=custom_args.l2))
+    optimizers.append(torch.optim.Adam(network.parameters(), lr=custom_args.base_lr, weight_decay=custom_args.l2))
     optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
                                      +list(base_encoder.parameters()) if x.requires_grad ], weight_decay=custom_args.l2))
 else:
@@ -252,7 +257,7 @@ for tepoch in range(training_epochs):
         graph_words = datasets.unk_single_mentions(graph_words, instances, custom_args.unk_p)
         graph_batch = (graph_words, *(graph_batch[1:]))
 
-        pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores)
+        pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores, one_best=custom_args.parser_one_best)
 
 
         train_total += len(instances)

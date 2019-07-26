@@ -106,7 +106,7 @@ labels_dev = [label_mapper[x.lower()] for x in labels_dev]
 labels_test = [label_mapper[x.lower()] for x in labels_test]
 
 if custom_args.bio_embeddings != 'none':
-    word_embs = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
+    word_embs, _ = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
 else:
     word_embs = torch.nn.Embedding(graph_word_alphabet.size(), 200)
 
@@ -127,16 +127,24 @@ if custom_args.rel_model == 'memory':
     graphrel_net = MemoryRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
                              energy_threshold=custom_args.memory_energy_threshold)
 elif custom_args.rel_model == 'graph_conv':
-    graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
-                                num_filters=custom_args.graph_conv_num_filters,
+    if not hasattr(custom_args, 'shared_conv_flag'):
+        num_filters = custom_args.graph_conv_num_filters if hasattr(custom_args, 'graph_conv_num_filters') else custom_args.private_conv_filters
+        graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
+                                num_filters=num_filters,
                                 filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp)
+    else:
+        graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
+                                num_filters=custom_args.private_conv_filters,
+                                filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp
+                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters)
 else:
     graphrel_net = GCNRel(mxl, 2, num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp)
 
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
 else:
-    classifier = MeanPoolClassifier(custom_args.graph_conv_num_filters, n_classes=len(all_labels))
+    num_filters = custom_args.graph_conv_num_filters if hasattr(custom_args, 'graph_conv_num_filters') else custom_args.private_conv_filters
+    classifier = MeanPoolClassifier(num_filters, n_classes=len(all_labels))
 
 total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp)
 total_net.load_state_dict(trained_state_dict)

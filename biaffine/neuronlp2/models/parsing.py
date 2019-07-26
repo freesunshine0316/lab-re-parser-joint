@@ -131,7 +131,7 @@ class BiRecurrentConvBiAffine(nn.Module):
         return out_arc, type, mask, length
 
     def get_probs(self, input_word, input_char, input_pos, mask=None, length=None, hx=None, energy_temp=1.,
-                  use_scores=False):
+                  use_scores=False, get_mst_tree=False, leading_symbolic=0):
         # almost the same as decode mst as we do not have to decode it
         # batch, arc labels, head, dependent
         # the energy is P( head, label | dependent)
@@ -175,9 +175,11 @@ class BiRecurrentConvBiAffine(nn.Module):
         else:
             energy = (loss_arc.unsqueeze(1) + loss_type) / energy_temp
             energy = energy.exp()
-            energy = nn.functional.normalize(energy, p=1, dim=3)
+            energy = nn.functional.normalize(energy, p=1, dim=1)
         # energy_2 = torch.exp(loss_arc_2.unsqueeze(1) + loss_type)
-        return energy
+        if get_mst_tree:
+            return energy, parser.decode_MST(energy.detach().cpu().numpy(), length, leading_symbolic=leading_symbolic, labeled=True)
+        return energy, None
 
     def loss(self, input_word, input_char, input_pos, heads, types, mask=None, length=None, hx=None):
         # out_arc shape [batch, length, length]

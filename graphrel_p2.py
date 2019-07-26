@@ -15,14 +15,32 @@ class RelNetwork(nn.Module):
         self.base_encoder = base_encoder
         self.energy_temp = energy_temp
 
-    def forward(self, batch, batch_graph, instances, use_scores=False):
+    def forward(self, batch, batch_graph, instances, use_scores=False, one_best=False):
         word, char, pos, heads, types, masks, lengths, indices = batch
         word_graph, char_graph, pos_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
-        energy = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp,
-                                       use_scores=use_scores)
+        if one_best:
+            with torch.no_grad():
+                self.parser.eval()
+                energy, one_best_tree = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp,
+                                       use_scores=use_scores, get_mst_tree=one_best)
+        else:
+            self.parser.train()
+            energy, _ = self.parser.get_probs(word, char, pos, mask=masks, length=lengths,
+                                                          energy_temp=self.energy_temp,
+                                                          use_scores=use_scores, get_mst_tree=one_best)
         word_h = self.base_encoder(word_graph, char_graph, pos_graph, masks_graph, lengths_graph)
         first_hiddens = []
         second_hiddens = []
+        if one_best:
+            heads, types = one_best_tree
+            discrete_energy = torch.zeros_like(energy)
+            for instance_index in range(heads.shape[0]):
+                for dep in range(heads.shape[1]):
+                    this_head = heads[instance_index][dep]
+                    this_type = types[instance_index][dep]
+                    discrete_energy[instance_index][this_type][this_head][dep] = 1.
+            energy = discrete_energy
+
         if isinstance(self.graphrel, GCNRel):
             output = self.graphrel.forward(word_h, energy, mask=masks, length=lengths)
             for instance_index, instance in enumerate(instances):
@@ -162,22 +180,19 @@ class BaseEncoder(nn.Module):
         return output
 
 class GCNRel(nn.Module):
-    def __init__(self, mxl, num_rel, num_dep_rels=0, hid_size=256, rnn_layer=2, gcn_layer=2, dp=0.5, dep_rel_emb_size=15):
+    def __init__(self, num_dep_rels=0, hid_size=256, gcn_layer=2, dp=0.5, dep_rel_emb_size=15):
         super(GCNRel, self).__init__()
 
-        self.mxl = mxl
-        self.num_rel = num_rel
         self.hid_size = hid_size
-        self.rnn_layer = rnn_layer
         self.gcn_layer = gcn_layer
         self.dp = dp
 
         self.emb_dep_rel = nn.Embedding(num_dep_rels, dep_rel_emb_size)
 
-        self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) if i == 0 else
-                                     GCN(self.hid_size, self.hid_size) for i in range(self.gcn_layer)])
-        self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2+dep_rel_emb_size, self.hid_size) if i == 0 else
-                                     GCN(self.hid_size, self.hid_size) for i in range(self.gcn_layer)])
+        self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
+                                     GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
+        self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
+                                     GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
         self.dp = nn.Dropout(dp)
 
     def output(self, feat):
@@ -218,31 +233,33 @@ class GCNRel(nn.Module):
         dep_bw = marginal_rel_probs.transpose(1, 2) + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
 
         for i in range(self.gcn_layer):
-            if i == 0:
+            # if i == 0:
                 # word_h = word_h.transpose(1, 2)
 
-                weighted_sum_of_labels = dep_probs @ self.emb_dep_rel.weight # batch, head, dep, dep rel embs
+                # weighted_sum_of_labels = dep_probs @ self.emb_dep_rel.weight # batch, head, dep, dep rel embs
+                #
+                # # weighted_sum_of_hiddens_deps = torch.bmm(word_h, marginal_rel_probs).transpose(1, 2) # batch, deps, hiddens
+                # # weighted_sum_of_hiddens_heads = torch.bmm(word_h, marginal_rel_probs.permute(0, 2, 1)).transpose(1, 2) # batch, heads, hiddens
+                #
+                # weighted_sum_of_labels_deps = torch.sum(weighted_sum_of_labels, dim=1)
+                # weighted_sum_of_labels_heads = torch.sum(weighted_sum_of_labels, dim=2)
+                #
+                # weighted_sum_m_deps = torch.cat((word_h, weighted_sum_of_labels_deps), dim=2) # batch, deps, hiddens
+                # weighted_sum_m_heads = torch.cat((word_h, weighted_sum_of_labels_heads), dim=2) # batch, heads, hiddens
+                # # print(weighted_sum_m_deps.shape)
+                #
+                # out_fw = weighted_sum_m_heads
+                # out_bw = weighted_sum_m_deps
 
-                # weighted_sum_of_hiddens_deps = torch.bmm(word_h, marginal_rel_probs).transpose(1, 2) # batch, deps, hiddens
-                # weighted_sum_of_hiddens_heads = torch.bmm(word_h, marginal_rel_probs.permute(0, 2, 1)).transpose(1, 2) # batch, heads, hiddens
+            out_fw = self.gcn_fw[i](word_h, dep_fw)
+            out_bw = self.gcn_bw[i](word_h, dep_bw)
+            word_h = torch.cat([out_fw, out_bw], dim=2)
 
-                weighted_sum_of_labels_deps = torch.sum(weighted_sum_of_labels, dim=1)
-                weighted_sum_of_labels_heads = torch.sum(weighted_sum_of_labels, dim=2)
-
-                weighted_sum_m_deps = torch.cat((word_h, weighted_sum_of_labels_deps), dim=2) # batch, deps, hiddens
-                weighted_sum_m_heads = torch.cat((word_h, weighted_sum_of_labels_heads), dim=2) # batch, heads, hiddens
-                # print(weighted_sum_m_deps.shape)
-
-                out_fw = weighted_sum_m_heads
-                out_bw = weighted_sum_m_deps
-
-                out_fw = self.gcn_fw[i](out_fw, dep_fw)
-                out_bw = self.gcn_bw[i](out_bw, dep_bw)
-            else:
-                out_fw = self.gcn_fw[i](out_fw, dep_fw)
-                out_bw = self.gcn_bw[i](out_bw, dep_bw)
+            # else:
+            #     out_fw = self.gcn_fw[i](out_fw, dep_fw)
+            #     out_bw = self.gcn_bw[i](out_bw, dep_bw)
         else:
-            out = torch.cat([out_fw, out_bw], dim=2)
-            word_h = self.dp(out)
+            # out = torch.cat([out_fw, out_bw], dim=2)
+            word_h = self.dp(word_h)
             # print(word_h.shape)
         return word_h

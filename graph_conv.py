@@ -38,13 +38,15 @@ class FullGraphRel(nn.Module):
             self.shared_conv_filters = torch.rand(self.num_shared_filters, in_size,  filter_size[0], filter_size[1])
             torch.nn.init.kaiming_normal_(self.shared_conv_filters)
             self.shared_conv_filters = nn.Parameter(self.shared_conv_filters)
+            self.conv_output_transform = nn.Linear(self.num_filters + self.num_shared_filters,
+                                                   self.num_filters + self.num_shared_filters)
         rel_embs = torch.rand(num_dep_rels, dep_rel_emb_size) # the weight, not the embedding module
         torch.nn.init.kaiming_normal_(rel_embs)
         self.rel_embs = torch.nn.Parameter(rel_embs)
         self.actf = nn.LeakyReLU()
         self.dp = nn.Dropout(dp)
         self.maxpool = nn.AdaptiveMaxPool1d(1)
-        self.input_transform = nn.Linear(self.num_filters+self.num_shared_filters, self.num_filters+self.num_shared_filters)
+        self.input_transform = nn.Linear(in_size*4, self.num_filters+self.num_shared_filters)
 
     def forward(self, energy, word_h, e1, e2, sent_len):
 
@@ -79,6 +81,7 @@ class FullGraphRel(nn.Module):
             results.append( nn.functional.conv2d(mem_bank[i].unsqueeze(0), filter[i]))
         results = torch.stack(results, dim=0)
         result = self.dp(self.actf(results))
+
         result = result.reshape(inputs.shape[0], self.num_filters, -1)
         result = self.maxpool(result).squeeze(-1)
 
@@ -88,8 +91,10 @@ class FullGraphRel(nn.Module):
             shared_results = self.maxpool(shared_results).squeeze(-1)
             result = torch.cat([shared_results, result], dim=-1)
         # transformed_input = self.dp(self.actf(self.input_transform(inputs)))
-        result = self.input_transform(result)
-        return result # + transformed_input
+            result = self.conv_output_transform(result)
+        transformed_input = self.dp(self.actf(self.input_transform(inputs)))
+        transformed_input = transformed_input + result
+        return transformed_input
 
 def combine_two_tensors(X, Y):
     X1 = X.unsqueeze(1)
