@@ -2,7 +2,7 @@ from collections import Counter
 
 NO_RELATION = 0
 
-def score(key, prediction, handler, verbose=False):
+def score(key, prediction, handler, verbose=True):
     correct_by_relation = Counter()
     guessed_by_relation = Counter()
     gold_by_relation = Counter()
