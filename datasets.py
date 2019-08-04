@@ -13,7 +13,7 @@ def read_mention_ids_and_gold_labels(mention_fn):
             gold_labels.append(items[4].lower())
     return mention_ids, gold_labels
 
-def load_word_embedding_vocab(zipped_word_embedding_file):
+def load_bio_word_embedding_vocab(zipped_word_embedding_file):
     words = bidict.bidict()
     with zipfile.ZipFile(zipped_word_embedding_file) as myzip:
         with myzip.open('bioasq.pubmed.vocab', 'r') as vocabfh:
@@ -22,7 +22,17 @@ def load_word_embedding_vocab(zipped_word_embedding_file):
                 words[word] = index
     return words
 
-def load_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab):
+def load_glove_word_embedding_vocab(zipped_word_embedding_file):
+    words = bidict.bidict()
+    with zipfile.ZipFile(zipped_word_embedding_file) as myzip:
+        with myzip.open('glove.42B.300d.txt', 'r') as vocabfh:
+            for index, line in enumerate(vocabfh):
+                word = line.strip().decode('utf8')
+                word = word.split(' ')[0]
+                words[word] = index
+    return words
+
+def load_bio_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab):
     embedding_size = 200
     useful_indices = [-1]
     pretrained_mask = [torch.ones((embedding_size,))]
@@ -49,12 +59,40 @@ def load_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab
     pretrained_mask = torch.stack(pretrained_mask, dim=0)
     return embeddings, pretrained_mask
 
+def load_glove_word_embeddings(zipped_word_embedding_file, embedding_vocab, data_vocab):
+    embedding_size = 300
+    useful_indices = [-1]
+    pretrained_mask = [torch.ones((embedding_size,))]
+    for word in data_vocab.instances:
+        if word in embedding_vocab:
+            useful_indices.append(embedding_vocab[word])
+            pretrained_mask.append(torch.zeros((embedding_size,)))
+        elif word.lower() in embedding_vocab:
+            useful_indices.append(embedding_vocab[word.lower()])
+            pretrained_mask.append(torch.zeros((embedding_size,)))
+        else:
+            useful_indices.append(-1)
+            pretrained_mask.append(torch.ones((embedding_size,)))
+    vals = numpy.array(useful_indices)
+    embeddings = torch.nn.Embedding(len(useful_indices), embedding_size) # 200 is the size of the bio embeddings
+    with zipfile.ZipFile(zipped_word_embedding_file) as myzip:
+        with myzip.open('glove.42B.300d.txt', 'r') as embfh:
+            for index, line in enumerate(embfh):
+                ii = numpy.where(vals == index)[0]
+                if len(ii) > 0:
+                    this_embedding = torch.tensor([float(x) for x in line.decode('utf8').strip().split(' ')[1:]])
+                    for i_index in ii:
+                        embeddings.weight.data[i_index].copy_(this_embedding)
+    pretrained_mask = torch.stack(pretrained_mask, dim=0)
+    return embeddings, pretrained_mask
 
 DATASET_FILES = {
     'pgr':['pgr/train.conllx', 'pgr/dev.conllx','pgr/test.conllx', 'pgr/train.mention.and.gold', 'pgr/dev.mention.and.gold'
            , 'pgr/test.mention.and.gold'],
     'cpr': ['cpr/train.conllx', 'cpr/dev.conllx', 'cpr/test.conllx', 'cpr/train.mention.and.gold', 'cpr/dev.mention.and.gold',
-            'cpr/test.mention.and.gold']
+            'cpr/test.mention.and.gold'],
+    'tacred': ['tacred/train.conllx', 'tacred/dev.conllx', 'tacred/test.conllx', 'tacred/train.mention.and.gold',
+            'tacred/dev.mention.and.gold', 'tacred/test.mention.and.gold'],
 }
 
 

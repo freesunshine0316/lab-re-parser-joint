@@ -14,6 +14,7 @@ import datasets
 from neuronlp2.io import conllx_data
 from sklearn.metrics import precision_recall_fscore_support
 from eval_helper import get_eval_metrics
+import tacred_scorer
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--joint-training', default=False, action='store_true')
@@ -53,7 +54,7 @@ parser.add_argument('--eval-test', default=False, action='store_true')
 parser.add_argument('--saved-folder', default='default')
 
 parser.add_argument('--device', default='cuda')
-parser.add_argument('--dataset-name', default='cpr')
+parser.add_argument('--dataset-name', default='cpr', choices=['cpr', 'pgr', 'tacred'])
 parser.add_argument('--bio-embeddings', default='bioasq.zip')
 parser.add_argument('--graph-alphabet-folder', default='graph_alphabets')
 
@@ -73,8 +74,8 @@ logging_file_detail = os.path.join(logging_file+'.detail')
 logger = open(logging_file, 'w')
 logger_detail = open(logging_file_detail, 'w')
 
-print(custom_args, file=logger)
-print(' '.join(sys.argv), file=logger_detail)
+print(custom_args, file=logger, flush=True)
+print(' '.join(sys.argv), file=logger_detail, flush=True)
 
 pretrained_dependency_parser_fn = 'biaffine/models/biaffine/network.pt'
 pretrained_dependency_parser_params_fn = 'biaffine/models/biaffine/network.pt.arg.json'
@@ -120,11 +121,14 @@ elif custom_args.parser_freeze_all:
     for param in network.parameters():
         param.requires_grad = False
 
-print("Creating graph classifier Alphabets")
+print("Creating graph classifier Alphabets", flush=True)
 alphabet_path = custom_args.graph_alphabet_folder
 train_path, dev_path, test_path, _, _, _ = datasets.DATASET_FILES[custom_args.dataset_name]
 if custom_args.bio_embeddings != 'none':
-    embedding_vocab_dict = datasets.load_word_embedding_vocab(custom_args.bio_embeddings)
+    if 'bio' in custom_args.bio_embeddings:
+        embedding_vocab_dict = datasets.load_bio_word_embedding_vocab(custom_args.bio_embeddings)
+    elif 'glove' in custom_args.bio_embeddings:
+        embedding_vocab_dict = datasets.load_glove_word_embedding_vocab(custom_args.bio_embeddings)
 else:
     embedding_vocab_dict = None
 graph_word_alphabet, graph_char_alphabet, _, _ = conllx_data.create_alphabets(alphabet_path, train_path,
@@ -146,13 +150,15 @@ all_labels.sort()
 
 if custom_args.dataset_name == 'cpr':
     negative_label = 'none'
-else:
+elif custom_args.dataset_name == 'pgr':
     negative_label = 'false'
+elif custom_args.dataset_name == 'tacred':
+    negative_label = 'no_relation'
 
 if negative_label != all_labels[0]:
     all_labels.remove(negative_label)
     all_labels.insert(0, negative_label)
-print(all_labels, file=logger)
+print(all_labels, file=logger, flush=True)
 label_mapper = {}
 for l_index, l in enumerate(all_labels):
     label_mapper[l] = l_index
@@ -161,7 +167,12 @@ labels_dev = [label_mapper[x.lower()] for x in labels_dev]
 labels_test = [label_mapper[x.lower()] for x in labels_test]
 
 if custom_args.bio_embeddings != 'none':
-    word_embs, grad_mask = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
+    if 'bio' in custom_args.bio_embeddings:
+        word_embs, grad_mask = datasets.load_bio_word_embeddings(custom_args.bio_embeddings,
+                                                             embedding_vocab_dict, graph_word_alphabet)
+    elif 'glove' in custom_args.bio_embeddings:
+        word_embs, grad_mask = datasets.load_glove_word_embeddings(custom_args.bio_embeddings,
+                                                            embedding_vocab_dict, graph_word_alphabet)
     if custom_args.base_encoder_train_random_embs:
         grad_mask = grad_mask.to(custom_args.device)
         def masking_grad(gr):
@@ -227,8 +238,8 @@ best_dev_f1 = 0
 for tepoch in range(training_epochs):
     total_net.train()
 
-    print('training epoch {}'.format(tepoch), file=logger_detail)
-    print('training epoch {}'.format(tepoch), file=logger)
+    print('training epoch {}'.format(tepoch), file=logger_detail, flush=True)
+    print('training epoch {}'.format(tepoch), file=logger, flush=True)
 
     # train_true_pos, dev_true_pos, test_true_pos = 0, 0, 0
     # train_pred_pos, dev_pred_pos, test_pred_pos = 0, 0, 0
@@ -288,19 +299,19 @@ for tepoch in range(training_epochs):
             optimizer.step()
         for optimizer in optimizers:
             optimizer.zero_grad()
-        print('epoch {} iter {} | loss {} | corr? {}'.format(tepoch, i, loss.item(), this_true), file=logger_detail)
+        print('epoch {} iter {} | loss {} | corr? {}'.format(tepoch, i, loss.item(), this_true), file=logger_detail, flush=True)
         i += 1
         if custom_args.debug and i > 10: break
     prec, rec, f1, _ = precision_recall_fscore_support(gold_labels, predicted_labels, average='micro')
     print('>> train | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(train_loss, train_corr / train_total, prec,
-                                                                          rec, f1), file=logger)
+                                                                          rec, f1), file=logger, flush=True)
     print('>> train | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(train_loss, train_corr / train_total, prec,
-                                                                          rec, f1), file=logger_detail)
+                                                                          rec, f1), file=logger_detail, flush=True)
     self_prec = 0 if out_num_no_none == 0 else corr_num_no_none / out_num_no_none
     self_rec = 0 if ref_num_no_none == 0 else corr_num_no_none / ref_num_no_none
     self_f1 =  2*self_prec*self_rec/(self_prec+self_rec+1e-8)
-    print('>> train | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1), file=logger)
-    print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
+    print('>> train | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1), file=logger, flush=True)
+    print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger, flush=True)
 
     with torch.no_grad():
         # dev
@@ -348,20 +359,22 @@ for tepoch in range(training_epochs):
             dev_loss += loss.item()
             if custom_args.debug and dev_total > 10: break
         prec, rec, f1, _ = precision_recall_fscore_support(gold_labels, predicted_labels, average='micro')
-        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger_detail)
-        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger)
+        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger_detail, flush=True)
+        print('>> dev | loss {:.4f} | acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(dev_loss, dev_corr / dev_total, prec, rec, f1), file=logger, flush=True)
         self_prec = 0 if out_num_no_none == 0 else corr_num_no_none / out_num_no_none
         self_rec = 0 if ref_num_no_none == 0 else  corr_num_no_none / ref_num_no_none
         self_f1 = 2 * self_prec * self_rec / (self_prec + self_rec + 1e-8)
         print('>> dev | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1),
-              file=logger)
-        print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
-        if f1 > best_dev_f1:
-            fn = 'e{}.tch'.format(tepoch)
+              file=logger, flush=True)
+        print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger, flush=True)
+        if custom_args.dataset_name == 'tacred':
+            self_prec, self_rec, self_f1 = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none, logger)
+        if self_f1 > best_dev_f1:
+            fn = 'e{}f1{:.4f}.tch'.format(tepoch, self_f1)
             full_fn = os.path.join(saved_folder, fn)
             if tepoch > 7:
                 torch.save(total_net.state_dict(), full_fn)
-            best_dev_f1 = f1
+            best_dev_f1 = self_f1
 
         if custom_args.eval_test:
             gold_labels = []
@@ -394,13 +407,13 @@ for tepoch in range(training_epochs):
                         predicted_labels.append(predicted_label[label_index].item())
                 if custom_args.debug and test_total > 10: break
             prec, rec, f1, _ = precision_recall_fscore_support(gold_labels, predicted_labels, average='micro')
-            print('>> test acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(test_corr / test_total, prec, rec, f1), file=logger)
-            print('>> test acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(test_corr / test_total, prec, rec, f1), file=logger_detail)
-            print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger)
+            print('>> test acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(test_corr / test_total, prec, rec, f1), file=logger, flush=True)
+            print('>> test acc {:.4f} | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(test_corr / test_total, prec, rec, f1), file=logger_detail, flush=True)
+            print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger, flush=True)
             # print(' '.join([str(x.cpu().item()) if not isinstance(x, str) else x for x in test_preds]), file=logger)
             # print(' '.join([str(x.cpu().item()) if not isinstance(x, str) else x for x in test_preds]), file=logger_detail)
 
     logger.flush()
     logger_detail.flush()
 logger.close()
-logger_detail.flush()
+logger_detail.close()

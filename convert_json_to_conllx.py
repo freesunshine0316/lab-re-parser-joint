@@ -21,17 +21,31 @@ def load_data(fns):
 # dev_mention_id_and_gold = 'pgr/dev.mention.and.gold'
 # test_mention_id_and_gold = 'pgr/test.mention.and.gold'
 # # data_list = load_data([training_fn, test_fn])
-training_fn = 'cpr/train.json'
-dev_fn = 'cpr/dev.json'
-test_fn = 'cpr/test.json'
 
-training_outfn = 'cpr/train.conllx'
-dev_outfn = 'cpr/dev.conllx'
-test_outfn = 'cpr/test.conllx'
+#
+# training_fn = 'cpr/train.json'
+# dev_fn = 'cpr/dev.json'
+# test_fn = 'cpr/test.json'
+#
+# training_outfn = 'cpr/train.conllx'
+# dev_outfn = 'cpr/dev.conllx'
+# test_outfn = 'cpr/test.conllx'
+#
+# training_mention_id_and_gold = 'cpr/train.mention.and.gold'
+# dev_mention_id_and_gold = 'cpr/dev.mention.and.gold'
+# test_mention_id_and_gold = 'cpr/test.mention.and.gold'
 
-training_mention_id_and_gold = 'cpr/train.mention.and.gold'
-dev_mention_id_and_gold = 'cpr/dev.mention.and.gold'
-test_mention_id_and_gold = 'cpr/test.mention.and.gold'
+training_fn = 'tacred/train.json'
+dev_fn = 'tacred/dev.json'
+test_fn = 'tacred/test.json'
+
+training_outfn = 'tacred/train.conllx'
+dev_outfn = 'tacred/dev.conllx'
+test_outfn = 'tacred/test.conllx'
+
+training_mention_id_and_gold = 'tacred/train.mention.and.gold'
+dev_mention_id_and_gold = 'tacred/dev.mention.and.gold'
+test_mention_id_and_gold = 'tacred/test.mention.and.gold'
 
 data_list = load_data([training_fn, dev_fn, test_fn])
 
@@ -81,17 +95,29 @@ def get_conllx_string(instance, conllx_handle, mention_handle):
         sent = instance['tokens']
     elif 'toks' in instance:
         sent = instance['toks']
+    elif 'token' in instance:
+        sent = instance['token']
     else:
         raise Exception
-    poses = instance['poses']
+
+    if 'poses' in instance:
+        poses = instance['poses']
+    elif 'stanford_pos' in instance:
+        poses = instance['stanford_pos']
+
     # print(header + ' '.join(sent), file=hanlde)
     for index, (word, pos) in enumerate(zip(sent, poses)):
         string = assemble_conllx_entry(index, word, pos)
         print(string, file=conllx_handle)
     print('', file=conllx_handle)
-    # pgr must have +1, cpr must not have +1
-    mention_str = [str(x) for x in [instance['subj_start'], instance['subj_end'], instance['obj_start'], instance['obj_end'],
+    # pgr must have +1, cpr and tacred must not have +1
+    if 'ref' in instance:
+        mention_str = [str(x) for x in [instance['subj_start'], instance['subj_end'], instance['obj_start'], instance['obj_end'],
                                     instance['ref']]]
+    elif 'relation' in instance:
+        mention_str = [str(x) for x in
+                       [instance['subj_start'], str(int(instance['subj_end']+1)), instance['obj_start'], str(int(instance['obj_end']+1)),
+                        instance['relation']]]
     print(' '.join(mention_str), file=mention_handle)
 
 for data, data_fn, mention_fn in zip(data_list, [training_outfn, dev_outfn, test_outfn], [training_mention_id_and_gold, dev_mention_id_and_gold,
