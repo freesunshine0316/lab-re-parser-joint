@@ -30,7 +30,7 @@ def score(key, prediction, handler, verbose=True):
         relations = gold_by_relation.keys()
         longest_relation = 0
         for relation in sorted(relations):
-            longest_relation = max(len(relation), longest_relation)
+            longest_relation = max(len(str(relation)), longest_relation)
         for relation in sorted(relations):
             # (compute the score)
             correct = correct_by_relation[relation]
