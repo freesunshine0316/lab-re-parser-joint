@@ -90,7 +90,50 @@ def print_out_conllx(dataset, outfn, mentionfn, train=False, dev_fn=None, dev_me
         else:
             get_conllx_string(instance, handle, mention_handle)
 
+def tacred_preprocess(instance):
+    subj_type = instance['subj_type']+'-SUBJ'
+    obj_type = instance['obj_type']+'-OBJ'
+    subj_len = instance['subj_end'] - instance['subj_start'] + 1
+    obj_len = instance['obj_end'] - instance['obj_start'] + 1
+    subj_start, subj_end, obj_start, obj_end = instance['subj_start'], instance['subj_end'], instance['obj_start'], instance['obj_end']
+    if subj_start < obj_start:
+        tokens = instance['token']
+        poses = instance['stanford_pos']
+        del tokens[subj_start:subj_end+1]
+        del poses[subj_start:subj_end+1]
+        tokens.insert(subj_start, subj_type)
+        poses.insert(subj_start, 'NNP')
+        forward_moving_gap = subj_len - 1
+        del tokens[obj_start-forward_moving_gap:obj_end+1-forward_moving_gap]
+        del poses[obj_start-forward_moving_gap:obj_end+1-forward_moving_gap]
+        tokens.insert(obj_start-forward_moving_gap, obj_type)
+        poses.insert(obj_start-forward_moving_gap, 'NNP')
+        instance['subj_end'] = subj_start + 1
+        instance['obj_start'] = obj_start-forward_moving_gap
+        instance['obj_end'] = instance['obj_start'] + 1
+    else:
+        tokens = instance['token']
+        poses = instance['stanford_pos']
+        del tokens[obj_start:obj_end+1]
+        del poses[obj_start:obj_end+1]
+        tokens.insert(obj_start, obj_type)
+        poses.insert(obj_start, 'NNP')
+        forward_moving_gap = obj_len - 1
+        del tokens[subj_start-forward_moving_gap:subj_end+1-forward_moving_gap]
+        del poses[subj_start-forward_moving_gap:subj_end+1-forward_moving_gap]
+        tokens.insert(subj_start-forward_moving_gap, subj_type)
+        poses.insert(subj_start-forward_moving_gap, 'NNP')
+        instance['obj_end'] = obj_start + 1
+        instance['subj_start'] = subj_start-forward_moving_gap
+        instance['subj_end'] = instance['subj_start'] + 1
+
+TACRED = True
+
 def get_conllx_string(instance, conllx_handle, mention_handle):
+
+    if TACRED:
+        tacred_preprocess(instance)
+
     if 'tokens' in instance:
         sent = instance['tokens']
     elif 'toks' in instance:
@@ -116,7 +159,7 @@ def get_conllx_string(instance, conllx_handle, mention_handle):
                                     instance['ref']]]
     elif 'relation' in instance:
         mention_str = [str(x) for x in
-                       [instance['subj_start'], str(int(instance['subj_end']+1)), instance['obj_start'], str(int(instance['obj_end']+1)),
+                       [instance['subj_start'], instance['subj_end'], instance['obj_start'], instance['obj_end'],
                         instance['relation']]]
     print(' '.join(mention_str), file=mention_handle)
 

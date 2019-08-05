@@ -138,3 +138,8 @@ def unk_single_mentions(graph_words, mentions, p=0.2):
         if e2 - b2 == 1:
             if random.random() < p: graph_words[index, b2+1:e2+1] = 0
     return graph_words
+
+def unk_single_words(graph_words, p=0.2):
+    bernoulli_mask = torch.zeros_like(graph_words).bernoulli_(1-p)
+    graph_words = graph_words * bernoulli_mask
+    return graph_words

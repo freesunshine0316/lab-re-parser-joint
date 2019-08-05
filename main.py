@@ -22,6 +22,8 @@ parser.add_argument('--base-lr', default=1e-6, type=float)
 parser.add_argument('--batch-size', default=6, type=int)
 parser.add_argument('--training-epochs', default=50, type=int)
 parser.add_argument('--unk-p', default=.2, type=float)
+parser.add_argument('--word-unk-p', default=.06, type=float)
+
 parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv']) # memory rel network
 
@@ -266,6 +268,8 @@ for tepoch in range(training_epochs):
 
         graph_words = graph_batch[0]
         graph_words = datasets.unk_single_mentions(graph_words, instances, custom_args.unk_p)
+        if custom_args.word_unk_p > 0:
+            graph_words = datasets.unk_single_words(graph_words, custom_args.word_unk_p)
         graph_batch = (graph_words, *(graph_batch[1:]))
 
         pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores, one_best=custom_args.parser_one_best)
