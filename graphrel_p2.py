@@ -3,6 +3,7 @@ import torch
 from neuronlp2.nn import VarMaskedFastLSTM
 import math
 from graph_conv import FullGraphRel
+from graphrel_add_gnn import GNNRel
 # this is only p2 as the dep probs are already given
 # based on GraphRel
 
@@ -180,7 +181,8 @@ class BaseEncoder(nn.Module):
         return output
 
 class GCNRel(nn.Module):
-    def __init__(self, num_dep_rels=0, hid_size=256, gcn_layer=2, dp=0.5, dep_rel_emb_size=15):
+    def __init__(self, num_dep_rels=0, hid_size=256, gcn_layer=2, dp=0.5, dep_rel_emb_size=15, gnn_type='gnnrel',
+                 energy_thres=0.):
         super(GCNRel, self).__init__()
 
         self.hid_size = hid_size
@@ -189,37 +191,22 @@ class GCNRel(nn.Module):
 
         self.emb_dep_rel = nn.Embedding(num_dep_rels, dep_rel_emb_size)
 
-        self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
-                                     GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
-        self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
-                                     GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
+        if gnn_type == 'gcn':
+            self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
+                                         GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
+            self.gcn_bw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
+                                         GCN(self.hid_size * 2, self.hid_size) for i in range(self.gcn_layer)])
+        elif gnn_type == 'gnnrel':
+            self.gcn_fw = nn.ModuleList([GNNRel(self.emb_dep_rel, in_size=self.hid_size * 2, out_size=self.hid_size) if i == 0 else
+                                         GNNRel(self.emb_dep_rel, in_size=self.hid_size * 2, out_size=self.hid_size) for i in range(self.gcn_layer)])
+            self.gcn_bw = nn.ModuleList([GNNRel(self.emb_dep_rel, in_size=self.hid_size * 2, out_size=self.hid_size) if i == 0 else
+                                         GNNRel(self.emb_dep_rel, in_size=self.hid_size * 2, out_size=self.hid_size) for i in range(self.gcn_layer)])
         self.dp = nn.Dropout(dp)
-
-    def output(self, feat):
-        out_ne, _ = self.rnn_ne(feat)
-        out_ne = self.dp(out_ne)
-        out_ne = self.fc_ne(out_ne)
-
-        trs0 = nn.functional.relu(self.trs0_rel(feat))
-        trs0 = self.dp(trs0)
-        trs1 = nn.functional.relu(self.trs1_rel(feat))
-        trs1 = self.dp(trs1)
-
-        trs0 = trs0.view((trs0.shape[0], trs0.shape[1], 1, trs0.shape[2]))
-        trs0 = trs0.expand((trs0.shape[0], trs0.shape[1], trs0.shape[1], trs0.shape[3]))
-        trs1 = trs1.view((trs1.shape[0], 1, trs1.shape[1], trs1.shape[2]))
-        trs1 = trs1.expand((trs1.shape[0], trs1.shape[2], trs1.shape[2], trs1.shape[3]))
-        trs = torch.cat([trs0, trs1], dim=3)
-
-        out_rel = self.fc_rel(trs)
-
-        return out_ne, out_rel
+        self.energy_thres = energy_thres
+        self.gnn_type = gnn_type
 
     def forward(self, word_h, dep_probs, mask=None, length=None, hx=None):
-        # pos = self.emb_pos(pos)
-        # inp = torch.cat([inp, pos], dim=2)
-        # inp = self.dp(inp)
-        #drop the paddings
+
         sent_len = int(mask.sum().item())
 
         dep_probs = dep_probs[:, :, :sent_len, :sent_len]
@@ -229,37 +216,26 @@ class GCNRel(nn.Module):
         marginal_rel_probs = dep_probs.sum(dim=3)  # batch, head, dep
 
         out_fw, out_bw = 0, 0
-        dep_fw = marginal_rel_probs + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
-        dep_bw = marginal_rel_probs.transpose(1, 2) + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
 
-        for i in range(self.gcn_layer):
-            # if i == 0:
-                # word_h = word_h.transpose(1, 2)
+        if self.gnn_type == 'gcn':
+            dep_fw = marginal_rel_probs + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
+            dep_bw = marginal_rel_probs.transpose(1, 2) + torch.eye(marginal_rel_probs.shape[1]).to(marginal_rel_probs.device)
 
-                # weighted_sum_of_labels = dep_probs @ self.emb_dep_rel.weight # batch, head, dep, dep rel embs
-                #
-                # # weighted_sum_of_hiddens_deps = torch.bmm(word_h, marginal_rel_probs).transpose(1, 2) # batch, deps, hiddens
-                # # weighted_sum_of_hiddens_heads = torch.bmm(word_h, marginal_rel_probs.permute(0, 2, 1)).transpose(1, 2) # batch, heads, hiddens
-                #
-                # weighted_sum_of_labels_deps = torch.sum(weighted_sum_of_labels, dim=1)
-                # weighted_sum_of_labels_heads = torch.sum(weighted_sum_of_labels, dim=2)
-                #
-                # weighted_sum_m_deps = torch.cat((word_h, weighted_sum_of_labels_deps), dim=2) # batch, deps, hiddens
-                # weighted_sum_m_heads = torch.cat((word_h, weighted_sum_of_labels_heads), dim=2) # batch, heads, hiddens
-                # # print(weighted_sum_m_deps.shape)
-                #
-                # out_fw = weighted_sum_m_heads
-                # out_bw = weighted_sum_m_deps
-
-            out_fw = self.gcn_fw[i](word_h, dep_fw)
-            out_bw = self.gcn_bw[i](word_h, dep_bw)
-            word_h = torch.cat([out_fw, out_bw], dim=2)
-
-            # else:
-            #     out_fw = self.gcn_fw[i](out_fw, dep_fw)
-            #     out_bw = self.gcn_bw[i](out_bw, dep_bw)
-        else:
-            # out = torch.cat([out_fw, out_bw], dim=2)
-            word_h = self.dp(word_h)
-            # print(word_h.shape)
+            for i in range(self.gcn_layer):
+                out_fw = self.gcn_fw[i](word_h, dep_fw)
+                out_bw = self.gcn_bw[i](word_h, dep_bw)
+                word_h = torch.cat([out_fw, out_bw], dim=2)
+            else:
+                word_h = self.dp(word_h)
+        elif self.gnn_type == 'gnnrel':
+            dep_probs = dep_probs.permute(0, 2, 1, 3) # batch, dep, head, labels
+            dep_probs = dep_probs.masked_fill(dep_probs < self.energy_thres, 0.0)
+            backward_dep_probs = dep_probs.permute(0, 2, 1, 3).contiguous()
+            for i in range(self.gcn_layer):
+                out_fw = self.gcn_fw[i](word_h, dep_probs)
+                out_bw = self.gcn_bw[i](word_h, backward_dep_probs)
+                word_h = torch.cat([out_fw, out_bw], dim=2)
+                word_h = self.dp(word_h)
+            else:
+                word_h = self.dp(word_h)
         return word_h
