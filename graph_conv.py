@@ -25,7 +25,7 @@ class FilterFactory(nn.Module):
 
 class FullGraphRel(nn.Module):
     def __init__(self, num_dep_rels, dep_rel_emb_size=15, in_size=256, dp=0.5, num_filters=200, filter_size=(3, 3),
-                 filter_factory_hidden=300, shared_conv_flag=False, shared_conv_filters=0):
+                 filter_factory_hidden=300, shared_conv_flag=False, shared_conv_filters=0, energy_threshold=0.):
         super(FullGraphRel, self).__init__()
         self.arc_composer = nn.Linear(in_size*4 + dep_rel_emb_size, in_size) # head rel dep
         self.num_filters = num_filters
@@ -47,9 +47,10 @@ class FullGraphRel(nn.Module):
         self.dp = nn.Dropout(dp)
         self.maxpool = nn.AdaptiveMaxPool1d(1)
         self.input_transform = nn.Linear(in_size*4, self.num_filters+self.num_shared_filters)
+        self.energy_thres = energy_threshold
 
     def forward(self, energy, word_h, e1, e2, sent_len):
-
+        energy = energy.masked_fill(energy < self.energy_thres, 0.0)
         mem_bank = self.get_arc_representations(word_h, energy, sent_len)
         output = self.conv_graph(e1, e2, mem_bank)
         return output
@@ -92,6 +93,7 @@ class FullGraphRel(nn.Module):
             result = torch.cat([shared_results, result], dim=-1)
         # transformed_input = self.dp(self.actf(self.input_transform(inputs)))
             result = self.conv_output_transform(result)
+            result = self.dp(self.actf(result))
         transformed_input = self.dp(self.actf(self.input_transform(inputs)))
         transformed_input = transformed_input + result
         return transformed_input

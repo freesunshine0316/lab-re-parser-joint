@@ -26,7 +26,7 @@ class GNNRel(nn.Module):
     #           Be careful, sum(seq * L) == 1.0, not sum(L)
     def forward(self, inp, adj_full, is_relu=True):
         adj = adj_full.sum(dim=-1) # [batch, seq, seq]
-        neigh_repre = torch.matmul(adj, inp) # [batch, seq, hidden_dim]
+        neigh_repre = torch.matmul(adj, inp) + inp # [batch, seq, hidden_dim]
         batch_size, seq_num, _, L = list(adj_full.size())
         # rel_repre: [batch, seq, emb_dim]
         rel_repre = torch.matmul(adj_full.view(batch_size, seq_num, -1), # [batch, seq, seq*L]

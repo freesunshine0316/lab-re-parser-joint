@@ -1,8 +1,8 @@
 from collections import Counter
-
+import sys
 NO_RELATION = 0
 
-def score(key, prediction, handler, verbose=True):
+def score(key, prediction, handler=sys.stdout, verbose=True):
     correct_by_relation = Counter()
     guessed_by_relation = Counter()
     gold_by_relation = Counter()

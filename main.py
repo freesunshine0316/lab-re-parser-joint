@@ -28,6 +28,7 @@ parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv', 'gcn']) # memory rel network
 
 parser.add_argument('--parser-freeze-embs', default=False, action='store_true') # freeze parser embeddings
+parser.add_argument('--parser-equal-probs', default=False, action='store_true') # freeze parser embeddings
 parser.add_argument('--parser-one-best', default=False, action='store_true')
 parser.add_argument('--parser-freeze-all', default=False, action='store_true')
 
@@ -205,17 +206,21 @@ elif custom_args.rel_model == 'graph_conv':
     graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
                                 num_filters=custom_args.private_conv_filters,
                                 filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp
-                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters)
+                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters,
+                                energy_threshold=custom_args.memory_energy_threshold)
 elif custom_args.rel_model == 'gcn':
     graphrel_net = GCNRel(num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp,
                           energy_thres=custom_args.memory_energy_threshold)
+else:
+    raise Exception
 
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
 else:
     classifier = MeanPoolClassifier(custom_args.shared_conv_filters+custom_args.private_conv_filters, n_classes=len(all_labels))
 
-total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp)
+total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp, config=custom_args,
+                       num_dep_rels=num_dep_rels)
 total_net = total_net.to(custom_args.device)
 
 optimizers = []

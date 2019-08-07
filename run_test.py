@@ -15,6 +15,7 @@ import datasets
 from neuronlp2.io import conllx_data
 from sklearn.metrics import precision_recall_fscore_support
 from eval_helper import get_eval_metrics
+import tacred_scorer
 
 
 parser = argparse.ArgumentParser()
@@ -69,7 +70,10 @@ print("Creating graph classifier Alphabets")
 alphabet_path = custom_args.graph_alphabet_folder
 train_path, dev_path, test_path, _, _, _ = datasets.DATASET_FILES[custom_args.dataset_name]
 if custom_args.bio_embeddings != 'none':
-    embedding_vocab_dict = datasets.load_word_embedding_vocab(custom_args.bio_embeddings)
+    if 'bio' in custom_args.bio_embeddings:
+        embedding_vocab_dict = datasets.load_bio_word_embedding_vocab(custom_args.bio_embeddings)
+    elif 'glove' in custom_args.bio_embeddings:
+        embedding_vocab_dict = datasets.load_glove_word_embedding_vocab(custom_args.bio_embeddings)
 else:
     embedding_vocab_dict = None
 graph_word_alphabet, graph_char_alphabet, _, _ = conllx_data.create_alphabets(alphabet_path, train_path,
@@ -91,8 +95,10 @@ all_labels.sort()
 
 if custom_args.dataset_name == 'cpr':
     negative_label = 'none'
-else:
+elif custom_args.dataset_name == 'pgr':
     negative_label = 'false'
+elif custom_args.dataset_name == 'tacred':
+    negative_label = 'no_relation'
 
 if negative_label != all_labels[0]:
     all_labels.remove(negative_label)
@@ -106,7 +112,17 @@ labels_dev = [label_mapper[x.lower()] for x in labels_dev]
 labels_test = [label_mapper[x.lower()] for x in labels_test]
 
 if custom_args.bio_embeddings != 'none':
-    word_embs, _ = datasets.load_word_embeddings(custom_args.bio_embeddings, embedding_vocab_dict, graph_word_alphabet)
+    if 'bio' in custom_args.bio_embeddings:
+        word_embs, grad_mask = datasets.load_bio_word_embeddings(custom_args.bio_embeddings,
+                                                             embedding_vocab_dict, graph_word_alphabet)
+    elif 'glove' in custom_args.bio_embeddings:
+        word_embs, grad_mask = datasets.load_glove_word_embeddings(custom_args.bio_embeddings,
+                                                            embedding_vocab_dict, graph_word_alphabet)
+    if custom_args.base_encoder_train_random_embs:
+        grad_mask = grad_mask.to(custom_args.device)
+        def masking_grad(gr):
+            return gr*grad_mask
+        word_embs.weight.register_hook(masking_grad)
 else:
     word_embs = torch.nn.Embedding(graph_word_alphabet.size(), 200)
 
@@ -143,10 +159,9 @@ else:
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
 else:
-    num_filters = custom_args.graph_conv_num_filters if hasattr(custom_args, 'graph_conv_num_filters') else custom_args.private_conv_filters
-    classifier = MeanPoolClassifier(num_filters, n_classes=len(all_labels))
+    classifier = MeanPoolClassifier(custom_args.shared_conv_filters+custom_args.private_conv_filters, n_classes=len(all_labels))
 
-total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp)
+total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp, config=custom_args)
 total_net.load_state_dict(trained_state_dict)
 total_net = total_net.to(custom_args.device)
 
@@ -205,3 +220,5 @@ with torch.no_grad():
     self_f1 = 2 * self_prec * self_rec / (self_prec + self_rec + 1e-8)
     print('>> test | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1))
     print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none))
+    if custom_args.dataset_name == 'tacred':
+        self_prec, self_rec, self_f1 = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none)

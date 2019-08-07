@@ -8,13 +8,15 @@ from graphrel_add_gnn import GNNRel
 # based on GraphRel
 
 class RelNetwork(nn.Module):
-    def __init__(self, parser, base_encoder, graphrel, classifier, energy_temp=1.):
+    def __init__(self, parser, base_encoder, graphrel, classifier, energy_temp=1., config=None, num_dep_rels=10):
         super(RelNetwork, self).__init__()
         self.parser = parser
         self.graphrel = graphrel
         self.classifier = classifier
         self.base_encoder = base_encoder
         self.energy_temp = energy_temp
+        self.config = config
+        self.num_dep_rels = num_dep_rels
 
     def forward(self, batch, batch_graph, instances, use_scores=False, one_best=False):
         word, char, pos, heads, types, masks, lengths, indices = batch
@@ -24,6 +26,10 @@ class RelNetwork(nn.Module):
                 self.parser.eval()
                 energy, one_best_tree = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp,
                                        use_scores=use_scores, get_mst_tree=one_best)
+        elif self.config.parser_equal_probs:
+            num_words = word.shape[1]
+            average_prob = 1 / (num_words * self.num_dep_rels)
+            energy = torch.full((word.shape[0], self.num_dep_rels, num_words, num_words), average_prob, device=word.device)
         else:
             self.parser.train()
             energy, _ = self.parser.get_probs(word, char, pos, mask=masks, length=lengths,
@@ -41,6 +47,7 @@ class RelNetwork(nn.Module):
                     this_type = types[instance_index][dep]
                     discrete_energy[instance_index][this_type][this_head][dep] = 1.
             energy = discrete_energy
+
 
         if isinstance(self.graphrel, GCNRel):
             output = self.graphrel.forward(word_h, energy, mask=masks, length=lengths)
@@ -190,6 +197,7 @@ class GCNRel(nn.Module):
         self.dp = dp
 
         self.emb_dep_rel = nn.Embedding(num_dep_rels, dep_rel_emb_size)
+        self.after_gcn_linear = nn.ModuleList([nn.Linear(self.hid_size * 2, self.hid_size * 2) for i in range(self.gcn_layer)])
 
         if gnn_type == 'gcn':
             self.gcn_fw = nn.ModuleList([GCN(self.hid_size * 2, self.hid_size) if i == 0 else
@@ -207,10 +215,10 @@ class GCNRel(nn.Module):
 
     def forward(self, word_h, dep_probs, mask=None, length=None, hx=None):
 
-        sent_len = int(mask.sum().item())
+        # sent_len = int(mask.sum().item())
 
-        dep_probs = dep_probs[:, :, :sent_len, :sent_len]
-        word_h = word_h[:, :sent_len]
+        # dep_probs = dep_probs[:, :, :sent_len, :sent_len]
+        # word_h = word_h[:, :sent_len]
 
         dep_probs = dep_probs.permute(0, 2, 3, 1)  # batch, head, dep, labels
         marginal_rel_probs = dep_probs.sum(dim=3)  # batch, head, dep
@@ -235,7 +243,5 @@ class GCNRel(nn.Module):
                 out_fw = self.gcn_fw[i](word_h, dep_probs)
                 out_bw = self.gcn_bw[i](word_h, backward_dep_probs)
                 word_h = torch.cat([out_fw, out_bw], dim=2)
-                word_h = self.dp(word_h)
-            else:
-                word_h = self.dp(word_h)
+                word_h = self.dp(torch.relu(self.after_gcn_linear[i](word_h)))
         return word_h
