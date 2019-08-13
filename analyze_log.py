@@ -1,16 +1,17 @@
 import argparse, os
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--logfile-name')
-parser.add_argument('--logfile-folder-name')
-
+parser.add_argument('--folder', default='saved_models')
+parser.add_argument('--key', default='tacred')
 args = parser.parse_args()
 
-if hasattr(args, 'logfile_folder_name'):
-    folders = os.listdir(args.logfile_folder_name)
-    files =[os.path.join(args.logfile_folder_name, folder, 'log.txt') for folder in folders]
+folders = os.listdir(args.folder)
+if args.key != 'all':
+    files =[os.path.join(args.folder, folder, 'log.txt') for folder in folders if args.key in folder ]
 else:
-    files = [args.logfile_name]
+    files =[os.path.join(args.folder, folder, 'log.txt') for folder in folders ]
+
+
 def get_best_numbers(fname):
     print('Doing', fname)
     with open(fname) as lfh:

@@ -13,14 +13,17 @@ PAD = "_PAD"
 PAD_POS = "_PAD_POS"
 PAD_TYPE = "_<PAD>"
 PAD_CHAR = "_PAD_CHAR"
+PAD_NER = "_"
 ROOT = "_ROOT"
 ROOT_POS = "_ROOT_POS"
 ROOT_TYPE = "_<ROOT>"
 ROOT_CHAR = "_ROOT_CHAR"
+ROOT_NER = "ROOT_NER"
 END = "_END"
 END_POS = "_END_POS"
 END_TYPE = "_<END>"
 END_CHAR = "_END_CHAR"
+
 _START_VOCAB = [PAD, ROOT, END]
 
 UNK_ID = 0
@@ -68,16 +71,19 @@ def create_alphabets(alphabet_directory, train_path, data_paths=None, max_vocabu
     char_alphabet = Alphabet(suffix+'character', defualt_value=True)
     pos_alphabet = Alphabet(suffix+'pos')
     type_alphabet = Alphabet(suffix+'type')
+    ner_alphabet = Alphabet(suffix+'ner')
     if not os.path.isdir(alphabet_directory):
         logger.info("Creating Alphabets: %s" % alphabet_directory)
 
         char_alphabet.add(PAD_CHAR)
         pos_alphabet.add(PAD_POS)
         type_alphabet.add(PAD_TYPE)
+        ner_alphabet.add(PAD_NER)
 
         char_alphabet.add(ROOT_CHAR)
         pos_alphabet.add(ROOT_POS)
         type_alphabet.add(ROOT_TYPE)
+        ner_alphabet.add(ROOT_NER)
 
         char_alphabet.add(END_CHAR)
         pos_alphabet.add(END_POS)
@@ -98,9 +104,11 @@ def create_alphabets(alphabet_directory, train_path, data_paths=None, max_vocabu
                 word = utils.DIGIT_RE.sub("0", tokens[1]) if normalize_digits else tokens[1]
                 pos = tokens[4]
                 type = tokens[7]
+                ner = tokens[-1]
 
                 pos_alphabet.add(pos)
                 type_alphabet.add(type)
+                ner_alphabet.add(ner)
 
                 if word in vocab:
                     vocab[word] += 1
@@ -136,30 +144,34 @@ def create_alphabets(alphabet_directory, train_path, data_paths=None, max_vocabu
         char_alphabet.save(alphabet_directory)
         pos_alphabet.save(alphabet_directory)
         type_alphabet.save(alphabet_directory)
+        ner_alphabet.save(alphabet_directory)
     else:
         word_alphabet.load(alphabet_directory)
         char_alphabet.load(alphabet_directory)
         pos_alphabet.load(alphabet_directory)
         type_alphabet.load(alphabet_directory)
+        ner_alphabet.load(alphabet_directory)
 
     word_alphabet.close()
     char_alphabet.close()
     pos_alphabet.close()
     type_alphabet.close()
+    ner_alphabet.close()
     logger.info("Word Alphabet Size (Singleton): %d (%d)" % (word_alphabet.size(), word_alphabet.singleton_size()))
     logger.info("Character Alphabet Size: %d" % char_alphabet.size())
     logger.info("POS Alphabet Size: %d" % pos_alphabet.size())
     logger.info("Type Alphabet Size: %d" % type_alphabet.size())
-    return word_alphabet, char_alphabet, pos_alphabet, type_alphabet
+    logger.info("NER Alphabet Size: {}".format(ner_alphabet.size()))
+    return word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet
 
 
-def read_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, max_size=None,
+def read_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet, max_size=None,
               normalize_digits=True, symbolic_root=False, symbolic_end=False):
     data = [[] for _ in _buckets]
     max_char_length = [0 for _ in _buckets]
     print('Reading data from %s' % source_path)
     counter = 0
-    reader = CoNLLXReader(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet)
+    reader = CoNLLXReader(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet)
     inst = reader.getNext(normalize_digits=normalize_digits, symbolic_root=symbolic_root, symbolic_end=symbolic_end)
     while inst is not None and (not max_size or counter < max_size):
         inst.index = counter
@@ -171,7 +183,7 @@ def read_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alph
         sent = inst.sentence
         for bucket_id, bucket_size in enumerate(_buckets):
             if inst_size < bucket_size:
-                data[bucket_id].append([sent.word_ids, sent.char_id_seqs, inst.pos_ids, inst.heads, inst.type_ids, inst.index])
+                data[bucket_id].append([sent.word_ids, sent.char_id_seqs, inst.pos_ids, inst.heads, inst.type_ids, inst.ner_ids, inst.index])
                 max_len = max([len(char_seq) for char_seq in sent.char_seqs])
                 if max_char_length[bucket_id] < max_len:
                     max_char_length[bucket_id] = max_len
@@ -182,13 +194,13 @@ def read_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alph
     print("Total number of data: %d" % counter)
     return data, max_char_length
 
-def read_unbucketed_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, max_size=None,
+def read_unbucketed_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet, max_size=None,
               normalize_digits=True, symbolic_root=False, symbolic_end=False):
     data = {}
     max_char_length = {}
     print('Reading data from %s' % source_path)
     counter = 0
-    reader = CoNLLXReader(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet)
+    reader = CoNLLXReader(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet)
     inst = reader.getNext(normalize_digits=normalize_digits, symbolic_root=symbolic_root, symbolic_end=symbolic_end)
     while inst is not None and (not max_size or counter < max_size):
         inst.index = counter
@@ -202,7 +214,7 @@ def read_unbucketed_data(source_path, word_alphabet, char_alphabet, pos_alphabet
             data[inst_size] = []
             max_char_length[inst_size] = 0
 
-        data[inst_size].append([sent.word_ids, sent.char_id_seqs, inst.pos_ids, inst.heads, inst.type_ids, inst.index])
+        data[inst_size].append([sent.word_ids, sent.char_id_seqs, inst.pos_ids, inst.heads, inst.type_ids, inst.ner_ids, inst.index])
         max_len = max([len(char_seq) for char_seq in sent.char_seqs])
         if max_char_length[inst_size] < max_len:
             max_char_length[inst_size] = max_len
@@ -415,9 +427,9 @@ def read_data_to_tensor(source_path, word_alphabet, char_alphabet, pos_alphabet,
     return data_tensor, bucket_sizes
 
 
-def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, max_size=None,
+def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet, max_size=None,
                         normalize_digits=True, symbolic_root=False, symbolic_end=False, device=torch.device('cpu')):
-    data, max_char_length = read_unbucketed_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet,
+    data, max_char_length = read_unbucketed_data(source_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet,
                                       max_size=max_size, normalize_digits=normalize_digits,
                                       symbolic_root=symbolic_root, symbolic_end=symbolic_end)
     bucket_sizes = {x:len(data[x]) for x in data}
@@ -429,6 +441,7 @@ def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alp
         bucket_length = bucket_id
         char_length = min(utils.MAX_CHAR_LENGTH, max_char_length[bucket_id] + utils.NUM_CHAR_PAD)
         wid_inputs = np.empty([bucket_size, bucket_length], dtype=np.int64)
+        nerid_inputs = np.empty([bucket_size, bucket_length], dtype=np.int64)
         cid_inputs = np.empty([bucket_size, bucket_length, char_length], dtype=np.int64)
         pid_inputs = np.empty([bucket_size, bucket_length], dtype=np.int64)
         hid_inputs = np.empty([bucket_size, bucket_length], dtype=np.int64)
@@ -442,7 +455,7 @@ def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alp
         indices = np.empty(bucket_size, dtype=np.int64)
 
         for i, inst in enumerate(data[bucket_id]):
-            wids, cid_seqs, pids, hids, tids, index = inst
+            wids, cid_seqs, pids, hids, tids, nerids, index = inst
             inst_size = len(wids)
             lengths[i] = inst_size
             indices[i] = index
@@ -453,6 +466,9 @@ def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alp
                 cid_inputs[i, c, :len(cids)] = cids
                 cid_inputs[i, c, len(cids):] = PAD_ID_CHAR
             cid_inputs[i, inst_size:, :] = PAD_ID_CHAR
+            # ner ids
+            nerid_inputs[i, :inst_size] = nerids
+            nerid_inputs[i, inst_size:] = PAD_ID_TAG
             # pos ids
             pid_inputs[i, :inst_size] = pids
             pid_inputs[i, inst_size:] = PAD_ID_TAG
@@ -470,6 +486,7 @@ def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alp
 
         words = torch.from_numpy(wid_inputs).to(device)
         chars = torch.from_numpy(cid_inputs).to(device)
+        ners = torch.from_numpy(nerid_inputs).to(device)
         pos = torch.from_numpy(pid_inputs).to(device)
         heads = torch.from_numpy(hid_inputs).to(device)
         types = torch.from_numpy(tid_inputs).to(device)
@@ -478,7 +495,7 @@ def read_data_to_tensor_dicts(source_path, word_alphabet, char_alphabet, pos_alp
         lengths = torch.from_numpy(lengths).to(device)
         indices = torch.from_numpy(indices).to(device)
 
-        data_tensor[bucket_id] = (words, chars, pos, heads, types, masks, single, lengths, indices)
+        data_tensor[bucket_id] = (words, chars, pos, ners, heads, types, masks, single, lengths, indices)
 
     return data_tensor, bucket_sizes
 
@@ -603,14 +620,14 @@ def doubly_iterate_batch_tensors_dicts(parser_data, graph_data, batch_size=1, un
             bucket_size = bucket_sizes[bucket_id]
             if bucket_size == 0:
                 continue
-            words, chars, pos, heads, types, masks, single, lengths, indices = data_tensor[bucket_id]
-            graph_words, graph_chars, graph_pos, graph_heads, graph_types, graph_masks, graph_single, graph_lengths\
+            words, chars, pos, _, heads, types, masks, single, lengths, indices = data_tensor[bucket_id]
+            graph_words, graph_chars, graph_pos, graph_ners, graph_heads, graph_types, graph_masks, graph_single, graph_lengths\
             , graph_indices = graph_data_tensor[bucket_id]
             data_indices = torch.randperm(bucket_size).long()
             for start_idx in range(0, bucket_size, batch_size):
                 excerpt = data_indices[start_idx:start_idx+batch_size]
-                yield (words[excerpt], chars[excerpt], pos[excerpt], heads[excerpt], types[excerpt],
-                      masks[excerpt], lengths[excerpt], indices[excerpt]), (graph_words[excerpt], graph_chars[excerpt], graph_pos[excerpt],
+                yield (words[excerpt], chars[excerpt], pos[excerpt], None, heads[excerpt], types[excerpt],
+                      masks[excerpt], lengths[excerpt], indices[excerpt]), (graph_words[excerpt], graph_chars[excerpt], graph_pos[excerpt], graph_ners[excerpt],
                         graph_heads[excerpt], graph_types[excerpt], graph_masks[excerpt],
                                                          graph_lengths[excerpt], graph_indices[excerpt])
 
@@ -620,14 +637,13 @@ def doubly_iterate_batch_tensors_dicts(parser_data, graph_data, batch_size=1, un
             if bucket_size == 0:
                 continue
 
-            words, chars, pos, heads, types, masks, single, lengths, indices = data_tensor[bucket_id]
-            graph_words, graph_chars, graph_pos, graph_heads, graph_types, graph_masks, graph_single, graph_lengths\
+            words, chars, pos, _, heads, types, masks, single, lengths, indices = data_tensor[bucket_id]
+            graph_words, graph_chars, graph_pos, graph_ners, graph_heads, graph_types, graph_masks, graph_single, graph_lengths\
             , graph_indices = graph_data_tensor[bucket_id]
 
             for start_idx in range(0, bucket_size, batch_size):
 
                 excerpt = slice(start_idx, start_idx + batch_size)
-                yield (words[excerpt], chars[excerpt], pos[excerpt], heads[excerpt], types[excerpt],
+                yield (words[excerpt], chars[excerpt], pos[excerpt], None, heads[excerpt], types[excerpt],
                       masks[excerpt], lengths[excerpt], indices[excerpt]), (graph_words[excerpt], graph_chars[excerpt], graph_pos[excerpt],
-                        graph_heads[excerpt], graph_types[excerpt], graph_masks[excerpt],
-                                                         graph_lengths[excerpt], graph_indices[excerpt])
+                                graph_ners[excerpt], graph_heads[excerpt], graph_types[excerpt], graph_masks[excerpt], graph_lengths[excerpt], graph_indices[excerpt])

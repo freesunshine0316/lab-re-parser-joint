@@ -19,23 +19,26 @@ class RelNetwork(nn.Module):
         self.num_dep_rels = num_dep_rels
 
     def forward(self, batch, batch_graph, instances, use_scores=False, one_best=False):
-        word, char, pos, heads, types, masks, lengths, indices = batch
-        word_graph, char_graph, pos_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
+        word, char, pos, _, heads, types, masks, lengths, indices = batch
+        word_graph, char_graph, pos_graph, ner_graph, _, _, masks_graph, lengths_graph, _ = batch_graph
         if one_best:
             with torch.no_grad():
                 self.parser.eval()
                 energy, one_best_tree = self.parser.get_probs(word, char, pos, mask=masks, length=lengths, energy_temp=self.energy_temp,
                                        use_scores=use_scores, get_mst_tree=one_best)
-        elif self.config.parser_equal_probs:
+        elif hasattr(self.config, 'parser_equal_probs') and self.config.parser_equal_probs:
             num_words = word.shape[1]
             average_prob = 1 / (num_words * self.num_dep_rels)
             energy = torch.full((word.shape[0], self.num_dep_rels, num_words, num_words), average_prob, device=word.device)
         else:
-            self.parser.train()
+            if hasattr(self.config, 'parser_freeze_all') and self.config.parser_freeze_all:
+                self.parser.eval()
+            else:
+                self.parser.train()
             energy, _ = self.parser.get_probs(word, char, pos, mask=masks, length=lengths,
                                                           energy_temp=self.energy_temp,
                                                           use_scores=use_scores, get_mst_tree=one_best)
-        word_h = self.base_encoder(word_graph, char_graph, pos_graph, masks_graph, lengths_graph)
+        word_h = self.base_encoder(word_graph, char_graph, pos_graph, ner_graph, masks_graph, lengths_graph)
         first_hiddens = []
         second_hiddens = []
         if one_best:
@@ -131,20 +134,23 @@ class GCN(nn.Module):
         return self.__class__.__name__ + '(hid_size=%d)' % (self.hid_size)
 
 class BaseEncoder(nn.Module):
-    def __init__(self, hid_size=256, emb_pos=None, emb_word=None, emb_char=None, kernel_size=0, num_filters=0, num_rnn_encoder_layers=3
+    def __init__(self, hid_size=256, emb_pos=None, emb_word=None, emb_char=None, emb_ner=None, kernel_size=0, num_filters=0, num_rnn_encoder_layers=3
                  , p_rnn=(0.33, 0.33), dp=0.5):
         super(BaseEncoder, self).__init__()
         # base encoder structures
         self.emb_pos = emb_pos
         self.emb_word = emb_word
         self.emb_char = emb_char
+        self.emb_ner = emb_ner
         char_dim = self.emb_char.embedding_dim
         self.conv1d = nn.Conv1d(char_dim, num_filters, kernel_size, padding=kernel_size - 1)
         dim_enc = self.emb_word.embedding_dim + self.emb_pos.embedding_dim + num_filters
+        if self.emb_ner:
+            dim_enc += self.emb_ner.embedding_dim
         self.base_rnn_encoder = VarMaskedFastLSTM(dim_enc, hid_size, num_layers=num_rnn_encoder_layers, batch_first=True, bidirectional=True, dropout=p_rnn)
         self.dp = nn.Dropout(dp)
 
-    def forward(self, input_word, input_char, input_pos, mask=None, length=None, hx=None):
+    def forward(self, input_word, input_char, input_pos, input_ner, mask=None, length=None, hx=None):
         # [batch, length, word_dim]
         # print(torch.max(input_word).cpu().item(), self.emb_word.weight.shape[0])
 
@@ -169,15 +175,21 @@ class BaseEncoder(nn.Module):
         # apply dropout on input
         char = self.dp(char)
         # concatenate word and char [batch, length, word_dim+char_filter]
-        input = torch.cat([input, char], dim=2)
+        # input = torch.cat([input, char], dim=2)
 
         # if self.pos:
         # [batch, length, pos_dim]
         pos = self.emb_pos(input_pos)
         # apply dropout on input
         pos = self.dp(pos)
-        input = torch.cat([input, pos], dim=2)
 
+        if self.emb_ner:
+            ner = self.emb_ner(input_ner)
+            ner = self.dp(ner)
+
+            input = torch.cat([input, char, pos, ner], dim=2)
+        else:
+            input = torch.cat([input, char, pos], dim=2)
         # output from rnn [batch, length, hidden_size]
         output, hc = self.base_rnn_encoder(input, mask, hx=hx)
 

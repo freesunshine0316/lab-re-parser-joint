@@ -13,13 +13,15 @@ class Sentence(object):
 
 
 class DependencyInstance(object):
-    def __init__(self, sentence, postags, pos_ids, heads, types, type_ids):
+    def __init__(self, sentence, postags, pos_ids, heads, types, type_ids, ners, ner_ids):
         self.sentence = sentence
         self.postags = postags
         self.pos_ids = pos_ids
         self.heads = heads
         self.types = types
         self.type_ids = type_ids
+        self.ners = ners
+        self.ner_ids = ner_ids
 
     def length(self):
         return self.sentence.length()

@@ -93,10 +93,16 @@ DATASET_FILES = {
             'cpr/test.mention.and.gold'],
     'tacred': ['tacred/train.conllx', 'tacred/dev.conllx', 'tacred/test.conllx', 'tacred/train.mention.and.gold',
             'tacred/dev.mention.and.gold', 'tacred/test.mention.and.gold'],
+    'semeval': ['semeval/train.fixed_ordering.conllx', 'semeval/dev.fixed_ordering.conllx', 'semeval/test.fixed_ordering.conllx',
+                'semeval/train.fixed_ordering.mention.and.gold', 'semeval/dev.fixed_ordering.mention.and.gold',
+                'semeval/test.fixed_ordering.mention.and.gold'],
+    'semeval_order': ['semeval/train.conllx', 'semeval/dev.fixed_ordering.conllx',
+                'semeval/test.fixed_ordering.conllx',
+                'semeval/train.mention.and.gold', 'semeval/dev.fixed_ordering.mention.and.gold',
+                'semeval/test.fixed_ordering.mention.and.gold']
 }
 
-
-def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, custom_args):
+def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, ner_alphabet, custom_args):
     parser_training_fn, parser_dev_fn, parser_test_fn, training_mention_id_and_gold, dev_mention_id_and_gold,\
     test_mention_id_and_gold = DATASET_FILES[custom_args.dataset_name]
 
@@ -104,20 +110,20 @@ def load_data(word_alphabets, char_alphabets, pos_alphabet, type_alphabet, custo
     char_alphabet, graph_char_alphabet = char_alphabets
 
     data_train = conllx_data.read_data_to_tensor_dicts(parser_training_fn, word_alphabet, char_alphabet, pos_alphabet,
-                                                 type_alphabet,
+                                                 type_alphabet, ner_alphabet,
                                                  symbolic_root=True, device=custom_args.device)
-    data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, word_alphabet, char_alphabet, pos_alphabet, type_alphabet,
+    data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet,
                                                symbolic_root=True, device=custom_args.device)
     data_test = conllx_data.read_data_to_tensor_dicts(parser_test_fn, word_alphabet, char_alphabet, pos_alphabet,
-                                                type_alphabet,
+                                                type_alphabet, ner_alphabet,
                                                 symbolic_root=True, device=custom_args.device)
     graph_data_train = conllx_data.read_data_to_tensor_dicts(parser_training_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
-                                                 type_alphabet,
+                                                 type_alphabet, ner_alphabet,
                                                  symbolic_root=True, device=custom_args.device, normalize_digits=False)
-    graph_data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet, type_alphabet,
+    graph_data_dev = conllx_data.read_data_to_tensor_dicts(parser_dev_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet, type_alphabet, ner_alphabet,
                                                symbolic_root=True, device=custom_args.device, normalize_digits=False)
     graph_data_test = conllx_data.read_data_to_tensor_dicts(parser_test_fn, graph_word_alphabet, graph_char_alphabet, pos_alphabet,
-                                                type_alphabet,
+                                                type_alphabet, ner_alphabet,
                                                 symbolic_root=True, device=custom_args.device, normalize_digits=False)
 
     train_mentions, train_labels = read_mention_ids_and_gold_labels(training_mention_id_and_gold)

@@ -22,13 +22,22 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--config-file', required=True)
 parser.add_argument('--model-param-file', required=True)
+parser.add_argument('--get-parses', action='store_true', default=False)
+parser.add_argument('--need-before',  action='store_true', default=False)
 
-args = parser.parse_args()
+main_args = parser.parse_args()
 
-with open(args.config_file, 'r', encoding='utf8') as cfh:
+for arg in main_args.__dict__:
+    print('{} = {}'.format(arg, main_args.__dict__[arg]))
+
+with open(main_args.config_file, 'r', encoding='utf8') as cfh:
     custom_args = eval(cfh.readline().strip())
+custom_args.memory_energy_threshold = 0.
+print('='*30)
+for arg in custom_args.__dict__:
+    print('{} = {}'.format(arg, custom_args.__dict__[arg]))
 
-trained_state_dict = torch.load(args.model_param_file)
+trained_state_dict = torch.load(main_args.model_param_file)
 
 pretrained_dependency_parser_fn = 'biaffine/models/biaffine/network.pt'
 pretrained_dependency_parser_params_fn = 'biaffine/models/biaffine/network.pt.arg.json'
@@ -67,7 +76,7 @@ network.load_state_dict(parser)
 #------------------------create data specific alphabets
 
 print("Creating graph classifier Alphabets")
-alphabet_path = custom_args.graph_alphabet_folder
+alphabet_path = os.path.join(custom_args.graph_alphabet_folder, custom_args.dataset_name)
 train_path, dev_path, test_path, _, _, _ = datasets.DATASET_FILES[custom_args.dataset_name]
 if custom_args.bio_embeddings != 'none':
     if 'bio' in custom_args.bio_embeddings:
@@ -76,7 +85,7 @@ if custom_args.bio_embeddings != 'none':
         embedding_vocab_dict = datasets.load_glove_word_embedding_vocab(custom_args.bio_embeddings)
 else:
     embedding_vocab_dict = None
-graph_word_alphabet, graph_char_alphabet, _, _ = conllx_data.create_alphabets(alphabet_path, train_path,
+graph_word_alphabet, graph_char_alphabet, _, _, graph_ner_alphabet = conllx_data.create_alphabets(alphabet_path, train_path,
                                                                                          data_paths=[dev_path, test_path],
                                                                                          max_vocabulary_size=100000,
                                                                                          embedd_dict=embedding_vocab_dict,
@@ -84,7 +93,7 @@ graph_word_alphabet, graph_char_alphabet, _, _ = conllx_data.create_alphabets(al
 
 parser_data, graph_data, mentions, labels = datasets.load_data((word_alphabet, graph_word_alphabet),
                                                                (char_alphabet, graph_char_alphabet), pos_alphabet, type_alphabet,
-                                                                     custom_args)
+                                                                graph_ner_alphabet, custom_args)
 data_train, data_dev, data_test = parser_data
 graph_data_train, graph_data_dev, graph_data_test = graph_data
 mentions_train, mentions_dev, mentions_test = mentions
@@ -99,6 +108,8 @@ elif custom_args.dataset_name == 'pgr':
     negative_label = 'false'
 elif custom_args.dataset_name == 'tacred':
     negative_label = 'no_relation'
+elif custom_args.dataset_name == 'semeval':
+    negative_label = 'other'
 
 if negative_label != all_labels[0]:
     all_labels.remove(negative_label)
@@ -134,34 +145,64 @@ pos_embs = copy.deepcopy(network.pos_embedd)
 num_dep_rels = type_alphabet.size()
 # word_embs = network.word_embedd
 char_embs = nn.Embedding(num_embeddings=graph_char_alphabet.size(), embedding_dim=custom_args.base_encoder_char_emb_size)
+if graph_ner_alphabet.size() > 3:
+    ner_embs = nn.Embedding(num_embeddings=graph_ner_alphabet.size(), embedding_dim=custom_args.base_encoder_ner_emb_size)
+else:
+    ner_embs = None
 
-mxl = 100
-base_encoder = BaseEncoder(hid_size=custom_args.base_encoder_hidden_size, emb_pos=pos_embs, emb_word=word_embs, emb_char=char_embs,
+base_encoder = BaseEncoder(hid_size=custom_args.base_encoder_hidden_size, emb_pos=pos_embs, emb_word=word_embs, emb_char=char_embs, emb_ner=ner_embs,
                            kernel_size=custom_args.base_encoder_kernel_size, num_filters=custom_args.base_encoder_num_filters,
                            num_rnn_encoder_layers=3, p_rnn=(0.33, 0.33), dp=custom_args.base_encoder_dp)
+
 if custom_args.rel_model == 'memory':
     graphrel_net = MemoryRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
                              energy_threshold=custom_args.memory_energy_threshold)
 elif custom_args.rel_model == 'graph_conv':
-    if not hasattr(custom_args, 'shared_conv_flag'):
-        num_filters = custom_args.graph_conv_num_filters if hasattr(custom_args, 'graph_conv_num_filters') else custom_args.private_conv_filters
-        graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
-                                num_filters=num_filters,
-                                filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp)
-    else:
-        graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
+    graphrel_net = FullGraphRel(num_dep_rels, dep_rel_emb_size=custom_args.dep_rel_emb_size, in_size=custom_args.base_encoder_hidden_size,
                                 num_filters=custom_args.private_conv_filters,
                                 filter_factory_hidden=custom_args.filter_factory_hidden, dp=custom_args.rel_model_dp
-                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters)
+                                , shared_conv_flag=custom_args.shared_conv_flag, shared_conv_filters=custom_args.shared_conv_filters,
+                                energy_threshold=custom_args.memory_energy_threshold)
+elif custom_args.rel_model == 'gcn':
+    graphrel_net = GCNRel(num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp,
+                          energy_thres=custom_args.memory_energy_threshold)
 else:
-    graphrel_net = GCNRel(mxl, 2, num_dep_rels, hid_size=custom_args.base_encoder_hidden_size, dp=custom_args.rel_model_dp)
+    raise Exception
 
 if custom_args.rel_model != 'graph_conv':
     classifier = MeanPoolClassifier(custom_args.base_encoder_hidden_size*4, n_classes=len(all_labels))
 else:
     classifier = MeanPoolClassifier(custom_args.shared_conv_filters+custom_args.private_conv_filters, n_classes=len(all_labels))
 
-total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp, config=custom_args)
+total_net = RelNetwork(network, base_encoder, graphrel_net, classifier, energy_temp=custom_args.energy_temp, config=custom_args,
+                       num_dep_rels=num_dep_rels)
+
+if main_args.need_before:
+    no_train_parses_file = main_args.config_file.replace('log.txt', 'before_finetune.parses')
+    no_train_parses = {}
+    with torch.no_grad():
+        network = network.to(custom_args.device)
+        network.eval()
+        for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_test, graph_data_test,
+                                                                                 custom_args.batch_size):
+            word, char, pos, ners, heads, types, masks, lengths, indices = batch
+            _, one_best_tree = network.get_probs(word, char, pos, mask=masks, length=lengths,
+                                                          use_scores=False, get_mst_tree=True)
+            parse_heads, parse_types = one_best_tree
+            for instance_index in range(parse_heads.shape[0]):
+                single_parse = []
+                index = indices[instance_index].item()
+                for dep in range(parse_heads.shape[1]):
+                    this_head = parse_heads[instance_index][dep]
+                    this_type = parse_types[instance_index][dep]
+                    single_parse.append((dep, this_head, this_type))
+                no_train_parses[index] = single_parse
+        with open(no_train_parses_file, 'w') as f:
+            for i in range(len(no_train_parses)):
+                for dep, head, type in no_train_parses[i]:
+                    print("{} {} {}".format(dep, head, type_alphabet.get_instance(type)), file=f)
+                print('', file=f)
+
 total_net.load_state_dict(trained_state_dict)
 total_net = total_net.to(custom_args.device)
 
@@ -182,8 +223,36 @@ corr_num_no_none = 0
 with torch.no_grad():
     total_net.eval()
 
+    if main_args.get_parses:
+        with_train_parses_file = main_args.config_file.replace('log.txt', 'after_finetune.parses')
+        with_train_parses = {}
+        with torch.no_grad():
+            network.eval()
+            for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_test, graph_data_test,
+                                                                                     custom_args.batch_size):
+                word, char, pos, ners, heads, types, masks, lengths, indices = batch
+                energy, one_best_tree = network.get_probs(word, char, pos, mask=masks, length=lengths,
+                                                     use_scores=False, get_mst_tree=True)
+                for dep in range(energy[0].shape[-1]):
+                    print(energy[0, ...,dep].tolist())
+                exit()
+                parse_heads, parse_types = one_best_tree
+                for instance_index in range(parse_heads.shape[0]):
+                    single_parse = []
+                    index = indices[instance_index].item()
+                    for dep in range(parse_heads.shape[1]):
+                        this_head = parse_heads[instance_index][dep]
+                        this_type = parse_types[instance_index][dep]
+                        single_parse.append((dep, this_head, this_type))
+                    with_train_parses[index] = single_parse
+            with open(with_train_parses_file, 'w') as f:
+                for i in range(len(with_train_parses)):
+                    for dep, head, type in with_train_parses[i]:
+                        print("{} {} {}".format(dep, head, type_alphabet.get_instance(type)), file=f)
+                    print('', file=f)
+
     for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_test, graph_data_test, batch_size):
-        word, char, pos, heads, types, masks, lengths, indices = batch
+        word, char, pos, ners, heads, types, masks, lengths, indices = batch
         instances = []
         this_labels = []
         for index in indices:
@@ -221,4 +290,7 @@ with torch.no_grad():
     print('>> test | SELF EVAL | prec {:.4f} rec {:.4f} f1 {:.4f}'.format(self_prec, self_rec, self_f1))
     print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none))
     if custom_args.dataset_name == 'tacred':
-        self_prec, self_rec, self_f1 = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none)
+        self_prec, self_rec, self_f1, _ = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none)
+    elif custom_args.dataset_name == 'semeval' or custom_args.dataset_name == 'semeval_order':
+        self_f1 = tacred_scorer.semeval_scorer(gold_labels_with_none, predicted_labels_with_none, all_labels,
+                                               custom_args, sys.stdout, test=True)

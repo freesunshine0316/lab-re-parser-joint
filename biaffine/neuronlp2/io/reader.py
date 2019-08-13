@@ -2,17 +2,18 @@ __author__ = 'max'
 
 from .instance import DependencyInstance, NERInstance
 from .instance import Sentence
-from .conllx_data import ROOT, ROOT_POS, ROOT_CHAR, ROOT_TYPE, END, END_POS, END_CHAR, END_TYPE
+from .conllx_data import ROOT, ROOT_POS, ROOT_CHAR, ROOT_TYPE, END, END_POS, END_CHAR, END_TYPE, ROOT_NER
 from . import utils
 
 
 class CoNLLXReader(object):
-    def __init__(self, file_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet):
+    def __init__(self, file_path, word_alphabet, char_alphabet, pos_alphabet, type_alphabet, ner_alphabet):
         self.__source_file = open(file_path, 'r', encoding='utf8')
         self.__word_alphabet = word_alphabet
         self.__char_alphabet = char_alphabet
         self.__pos_alphabet = pos_alphabet
         self.__type_alphabet = type_alphabet
+        self.__ner_alphabet = ner_alphabet
 
     def close(self):
         self.__source_file.close()
@@ -45,6 +46,8 @@ class CoNLLXReader(object):
         types = []
         type_ids = []
         heads = []
+        ners = []
+        ner_ids = []
 
         if symbolic_root:
             words.append(ROOT)
@@ -56,6 +59,8 @@ class CoNLLXReader(object):
             types.append(ROOT_TYPE)
             type_ids.append(self.__type_alphabet.get_index(ROOT_TYPE))
             heads.append(0)
+            ners.append(ROOT_NER)
+            ner_ids.append(self.__ner_alphabet.get_index(ROOT_NER))
 
         for tokens in lines:
             chars = []
@@ -73,6 +78,7 @@ class CoNLLXReader(object):
             pos = tokens[4]
             head = int(tokens[6])
             type = tokens[7]
+            ner = tokens[-1]
 
             words.append(word)
             word_ids.append(self.__word_alphabet.get_index(word))
@@ -85,6 +91,9 @@ class CoNLLXReader(object):
 
             heads.append(head)
 
+            ners.append(ner)
+            ner_ids.append(self.__ner_alphabet.get_index(ner))
+
         if symbolic_end:
             words.append(END)
             word_ids.append(self.__word_alphabet.get_index(END))
@@ -96,7 +105,8 @@ class CoNLLXReader(object):
             type_ids.append(self.__type_alphabet.get_index(END_TYPE))
             heads.append(0)
 
-        return DependencyInstance(Sentence(words, word_ids, char_seqs, char_id_seqs), postags, pos_ids, heads, types, type_ids)
+        return DependencyInstance(Sentence(words, word_ids, char_seqs, char_id_seqs), postags, pos_ids, heads, types, type_ids
+                                  , ners, ner_ids)
 
 
 class CoNLL03Reader(object):

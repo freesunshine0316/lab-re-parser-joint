@@ -19,10 +19,11 @@ import tacred_scorer
 parser = argparse.ArgumentParser()
 parser.add_argument('--joint-training', default=False, action='store_true')
 parser.add_argument('--base-lr', default=1e-6, type=float)
+parser.add_argument('--lr', default=1e-3, type=float)
 parser.add_argument('--batch-size', default=6, type=int)
 parser.add_argument('--training-epochs', default=50, type=int)
 parser.add_argument('--unk-p', default=.2, type=float)
-parser.add_argument('--word-unk-p', default=.06, type=float)
+parser.add_argument('--word-unk-p', default=.0, type=float)
 
 parser.add_argument('--l2', default=0., type=float)
 parser.add_argument('--rel-model', choices=['memory', 'graph_conv', 'gcn']) # memory rel network
@@ -31,11 +32,13 @@ parser.add_argument('--parser-freeze-embs', default=False, action='store_true') 
 parser.add_argument('--parser-equal-probs', default=False, action='store_true') # freeze parser embeddings
 parser.add_argument('--parser-one-best', default=False, action='store_true')
 parser.add_argument('--parser-freeze-all', default=False, action='store_true')
+parser.add_argument('--parser-randomize', default=False, action='store_true')
 
 parser.add_argument('--rel-model-dp', default=0.3, type=float)
-parser.add_argument('--memory-energy-threshold', default=1e-1, type=float)
+parser.add_argument('--memory-energy-threshold', default=0., type=float)
 
 parser.add_argument('--base-encoder-char-emb-size', default=50, type=int)
+parser.add_argument('--base-encoder-ner-emb-size', default=50, type=int)
 parser.add_argument('--base-encoder-hidden-size', default=300, type=int)
 parser.add_argument('--base-encoder-no-word-emb-tuning', default=False, action='store_true')
 parser.add_argument('--base-encoder-train-random-embs', default=False, action='store_true')
@@ -57,7 +60,7 @@ parser.add_argument('--eval-test', default=False, action='store_true')
 parser.add_argument('--saved-folder', default='default')
 
 parser.add_argument('--device', default='cuda')
-parser.add_argument('--dataset-name', default='cpr', choices=['cpr', 'pgr', 'tacred'])
+parser.add_argument('--dataset-name', default='cpr', choices=['cpr', 'pgr', 'tacred', 'semeval', 'semeval_order'])
 parser.add_argument('--bio-embeddings', default='bioasq.zip')
 parser.add_argument('--graph-alphabet-folder', default='graph_alphabets')
 
@@ -79,6 +82,7 @@ logger_detail = open(logging_file_detail, 'w')
 
 print(custom_args, file=logger, flush=True)
 print(' '.join(sys.argv), file=logger_detail, flush=True)
+print(' '.join(sys.argv))
 
 pretrained_dependency_parser_fn = 'biaffine/models/biaffine/network.pt'
 pretrained_dependency_parser_params_fn = 'biaffine/models/biaffine/network.pt.arg.json'
@@ -114,6 +118,10 @@ word_alphabet.load(pretrained_dependency_parser_vocab_fn)
 
 network.load_state_dict(parser)
 
+if custom_args.parser_randomize:
+    for param in network.parameters():
+        torch.nn.init.uniform_(param.data, a=-0.04, b=0.04)
+
 #------------------------create data specific alphabets
 
 if custom_args.parser_freeze_embs:
@@ -124,8 +132,9 @@ elif custom_args.parser_freeze_all:
     for param in network.parameters():
         param.requires_grad = False
 
-print("Creating graph classifier Alphabets", flush=True)
-alphabet_path = custom_args.graph_alphabet_folder
+alphabet_path = os.path.join(custom_args.graph_alphabet_folder, custom_args.dataset_name)
+print("Creating graph classifier Alphabets at {}".format(alphabet_path), flush=True)
+
 train_path, dev_path, test_path, _, _, _ = datasets.DATASET_FILES[custom_args.dataset_name]
 if custom_args.bio_embeddings != 'none':
     if 'bio' in custom_args.bio_embeddings:
@@ -134,14 +143,15 @@ if custom_args.bio_embeddings != 'none':
         embedding_vocab_dict = datasets.load_glove_word_embedding_vocab(custom_args.bio_embeddings)
 else:
     embedding_vocab_dict = None
-graph_word_alphabet, graph_char_alphabet, _, _ = conllx_data.create_alphabets(alphabet_path, train_path,
+
+graph_word_alphabet, graph_char_alphabet, _, _, graph_ner_alphabet = conllx_data.create_alphabets(alphabet_path, train_path,
                                                                                          data_paths=[dev_path, test_path],
                                                                                          max_vocabulary_size=100000,
                                                                                          embedd_dict=embedding_vocab_dict,
                                                                                          normalize_digits=False, suffix='graph_')
 
 parser_data, graph_data, mentions, labels = datasets.load_data((word_alphabet, graph_word_alphabet),
-                                                               (char_alphabet, graph_char_alphabet), pos_alphabet, type_alphabet,
+                                                               (char_alphabet, graph_char_alphabet), pos_alphabet, type_alphabet, graph_ner_alphabet,
                                                                      custom_args)
 data_train, data_dev, data_test = parser_data
 graph_data_train, graph_data_dev, graph_data_test = graph_data
@@ -157,6 +167,8 @@ elif custom_args.dataset_name == 'pgr':
     negative_label = 'false'
 elif custom_args.dataset_name == 'tacred':
     negative_label = 'no_relation'
+elif custom_args.dataset_name == 'semeval' or custom_args.dataset_name == 'semeval_order':
+    negative_label = 'other'
 
 if negative_label != all_labels[0]:
     all_labels.remove(negative_label)
@@ -193,9 +205,13 @@ pos_embs.requires_grad = True
 num_dep_rels = type_alphabet.size()
 # word_embs = network.word_embedd
 char_embs = nn.Embedding(num_embeddings=graph_char_alphabet.size(), embedding_dim=custom_args.base_encoder_char_emb_size)
+if graph_ner_alphabet.size() > 3:
+    ner_embs = nn.Embedding(num_embeddings=graph_ner_alphabet.size(), embedding_dim=custom_args.base_encoder_ner_emb_size)
+else:
+    ner_embs = None
 
 mxl = 100
-base_encoder = BaseEncoder(hid_size=custom_args.base_encoder_hidden_size, emb_pos=pos_embs, emb_word=word_embs, emb_char=char_embs,
+base_encoder = BaseEncoder(hid_size=custom_args.base_encoder_hidden_size, emb_pos=pos_embs, emb_word=word_embs, emb_char=char_embs, emb_ner=ner_embs,
                            kernel_size=custom_args.base_encoder_kernel_size, num_filters=custom_args.base_encoder_num_filters,
                            num_rnn_encoder_layers=3, p_rnn=(0.33, 0.33), dp=custom_args.base_encoder_dp)
 
@@ -231,7 +247,7 @@ if not custom_args.joint_training:
 else:
     optimizers.append( torch.optim.Adam([x for x in list(classifier.parameters())+list(graphrel_net.parameters())
                                      +list(base_encoder.parameters())+list(network.parameters()) if x.requires_grad],
-                                        weight_decay=custom_args.l2))
+                                        weight_decay=custom_args.l2, lr=custom_args.lr))
 
 # network.eval()
 training_epochs = custom_args.training_epochs
@@ -243,6 +259,7 @@ label_weights[0] = 1
 loss_func = torch.nn.NLLLoss(weight=label_weights)
 # training loop
 best_dev_f1 = 0
+old_fn = None
 for tepoch in range(training_epochs):
     total_net.train()
 
@@ -264,7 +281,7 @@ for tepoch in range(training_epochs):
     out_num_no_none = 0
     corr_num_no_none = 0
     for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_train, graph_data_train, batch_size, shuffle=True):
-        word, char, pos, heads, types, masks, lengths, indices = batch
+        word, char, pos, ner, heads, types, masks, lengths, indices = batch
         instances = []
         this_labels = []
         for index in indices:
@@ -278,7 +295,8 @@ for tepoch in range(training_epochs):
             graph_words = datasets.unk_single_words(graph_words, custom_args.word_unk_p)
         graph_batch = (graph_words, *(graph_batch[1:]))
 
-        pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores, one_best=custom_args.parser_one_best)
+        pred = total_net.forward(batch, graph_batch, instances, use_scores=custom_args.parser_return_scores,
+                                 one_best=custom_args.parser_one_best)
 
 
         train_total += len(instances)
@@ -335,7 +353,7 @@ for tepoch in range(training_epochs):
         out_num_no_none = 0
         corr_num_no_none = 0
         for batch, graph_batch in conllx_data.doubly_iterate_batch_tensors_dicts(data_dev, graph_data_dev, batch_size):
-            word, char, pos, heads, types, masks, lengths, indices = batch
+            word, char, pos, _, heads, types, masks, lengths, indices = batch
             # else:
             instances = []
             this_labels = []
@@ -378,13 +396,19 @@ for tepoch in range(training_epochs):
               file=logger, flush=True)
         print(get_eval_metrics(predicted_labels_with_none, gold_labels_with_none), file=logger, flush=True)
         if custom_args.dataset_name == 'tacred':
-            self_prec, self_rec, self_f1 = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none, logger)
+            self_prec, self_rec, self_f1, macro_f1 = tacred_scorer.score(gold_labels_with_none, predicted_labels_with_none, logger)
+        elif custom_args.dataset_name == 'semeval' or custom_args.dataset_name == 'semeval_order':
+            self_f1 = tacred_scorer.semeval_scorer(gold_labels_with_none, predicted_labels_with_none, all_labels, custom_args, logger)
         if self_f1 > best_dev_f1:
             fn = 'e{}f1{:.4f}.tch'.format(tepoch, self_f1)
             full_fn = os.path.join(saved_folder, fn)
             if tepoch > 7:
+                if os.path.exists(old_fn):
+                    os.remove(old_fn)
                 torch.save(total_net.state_dict(), full_fn)
             best_dev_f1 = self_f1
+            print('ITER {} BEST DEV F1: {}'.format(tepoch, best_dev_f1))
+            old_fn = full_fn
 
         if custom_args.eval_test:
             gold_labels = []

@@ -1,6 +1,6 @@
 import json
 
-STR_FORMAT = '{}\t{}\t{}\t_\t{}\t_\t0\troot\t_\t_'
+STR_FORMAT = '{}\t{}\t{}\t_\t{}\t_\t0\troot\t_\t{}'
 
 def load_data(fns):
     jsons = []
@@ -35,21 +35,47 @@ def load_data(fns):
 # dev_mention_id_and_gold = 'cpr/dev.mention.and.gold'
 # test_mention_id_and_gold = 'cpr/test.mention.and.gold'
 
-training_fn = 'tacred/train.json'
-dev_fn = 'tacred/dev.json'
-test_fn = 'tacred/test.json'
+# training_fn = 'tacred/train.json'
+# dev_fn = 'tacred/dev.json'
+# test_fn = 'tacred/test.json'
+# 
+# training_outfn = 'tacred/train.conllx'
+# dev_outfn = 'tacred/dev.conllx'
+# test_outfn = 'tacred/test.conllx'
+# 
+# training_mention_id_and_gold = 'tacred/train.mention.and.gold'
+# dev_mention_id_and_gold = 'tacred/dev.mention.and.gold'
+# test_mention_id_and_gold = 'tacred/test.mention.and.gold'
 
-training_outfn = 'tacred/train.conllx'
-dev_outfn = 'tacred/dev.conllx'
-test_outfn = 'tacred/test.conllx'
+training_fn = 'semeval/train.json'
+dev_fn = 'semeval/dev.json'
+test_fn = 'semeval/test.json'
 
-training_mention_id_and_gold = 'tacred/train.mention.and.gold'
-dev_mention_id_and_gold = 'tacred/dev.mention.and.gold'
-test_mention_id_and_gold = 'tacred/test.mention.and.gold'
+training_outfn = 'semeval/train.conllx'
+dev_outfn = 'semeval/dev.conllx'
+test_outfn = 'semeval/test.conllx'
+
+training_mention_id_and_gold = 'semeval/train.mention.and.gold'
+dev_mention_id_and_gold = 'semeval/dev.mention.and.gold'
+test_mention_id_and_gold = 'semeval/test.mention.and.gold'
+
+#
+# training_fn = 'semeval/train.fixed_ordering.json'
+# dev_fn = 'semeval/dev.fixed_ordering.json'
+# test_fn = 'semeval/test.fixed_ordering.json'
+#
+# training_outfn = 'semeval/train.fixed_ordering.conllx'
+# dev_outfn = 'semeval/dev.fixed_ordering.conllx'
+# test_outfn = 'semeval/test.fixed_ordering.conllx'
+#
+# training_mention_id_and_gold = 'semeval/train.fixed_ordering.mention.and.gold'
+# dev_mention_id_and_gold = 'semeval/dev.fixed_ordering.mention.and.gold'
+# test_mention_id_and_gold = 'semeval/test.fixed_ordering.mention.and.gold'
+
 
 data_list = load_data([training_fn, dev_fn, test_fn])
 
-def assemble_conllx_entry(index, word, pos):
+def assemble_conllx_entry(index, word, pos, ner):
     #process the words and pos tags, converting them to ptb standards
     if word == '(' or word == '<':
         word = '-LRB-'
@@ -67,7 +93,7 @@ def assemble_conllx_entry(index, word, pos):
     if pos == 'HYPH': pos = ','
     elif pos == 'ADD' or pos == 'XX' or pos == 'NFP': pos = 'FW'
     elif pos == 'AFX': pos = 'JJ'
-    return STR_FORMAT.format(index, word, word.lower(), pos)
+    return STR_FORMAT.format(index, word, word.lower(), pos, ner)
 
 def print_out_conllx(dataset, outfn, mentionfn, train=False, dev_fn=None, dev_mention_fn=None):
     header = '# text = '
@@ -99,35 +125,49 @@ def tacred_preprocess(instance):
     if subj_start < obj_start:
         tokens = instance['token']
         poses = instance['stanford_pos']
+        ners = instance['stanford_ner']
         del tokens[subj_start:subj_end+1]
         del poses[subj_start:subj_end+1]
+        ner = ners[subj_start]
+        del ners[subj_start:subj_end+1]
         tokens.insert(subj_start, subj_type)
         poses.insert(subj_start, 'NNP')
+        ners.insert(subj_start, ner)
         forward_moving_gap = subj_len - 1
         del tokens[obj_start-forward_moving_gap:obj_end+1-forward_moving_gap]
         del poses[obj_start-forward_moving_gap:obj_end+1-forward_moving_gap]
+        ner = ners[obj_start-forward_moving_gap]
+        del ners[obj_start-forward_moving_gap:obj_end+1-forward_moving_gap]
         tokens.insert(obj_start-forward_moving_gap, obj_type)
         poses.insert(obj_start-forward_moving_gap, 'NNP')
+        ners.insert(obj_start-forward_moving_gap, ner)
         instance['subj_end'] = subj_start + 1
         instance['obj_start'] = obj_start-forward_moving_gap
         instance['obj_end'] = instance['obj_start'] + 1
     else:
         tokens = instance['token']
         poses = instance['stanford_pos']
+        ners = instance['stanford_ner']
         del tokens[obj_start:obj_end+1]
         del poses[obj_start:obj_end+1]
+        ner = ners[obj_start]
+        del ners[obj_start:obj_end+1]
         tokens.insert(obj_start, obj_type)
         poses.insert(obj_start, 'NNP')
+        ners.insert(obj_start, ner)
         forward_moving_gap = obj_len - 1
         del tokens[subj_start-forward_moving_gap:subj_end+1-forward_moving_gap]
         del poses[subj_start-forward_moving_gap:subj_end+1-forward_moving_gap]
+        ner = ners[subj_start-forward_moving_gap]
+        del ners[subj_start-forward_moving_gap:subj_end+1-forward_moving_gap]
         tokens.insert(subj_start-forward_moving_gap, subj_type)
         poses.insert(subj_start-forward_moving_gap, 'NNP')
+        ners.insert(subj_start - forward_moving_gap, ner)
         instance['obj_end'] = obj_start + 1
         instance['subj_start'] = subj_start-forward_moving_gap
         instance['subj_end'] = instance['subj_start'] + 1
 
-TACRED = True
+TACRED = False
 
 def get_conllx_string(instance, conllx_handle, mention_handle):
 
@@ -147,10 +187,19 @@ def get_conllx_string(instance, conllx_handle, mention_handle):
         poses = instance['poses']
     elif 'stanford_pos' in instance:
         poses = instance['stanford_pos']
+    else:
+        raise Exception
+
+    if 'stanford_ner' in instance:
+        ners = instance['stanford_ner']
+    elif 'ner' in instance:
+        ners = instance['ner']
+    else:
+        ners = ['_'] * len(poses)
 
     # print(header + ' '.join(sent), file=hanlde)
-    for index, (word, pos) in enumerate(zip(sent, poses)):
-        string = assemble_conllx_entry(index, word, pos)
+    for index, (word, pos, ner) in enumerate(zip(sent, poses, ners)):
+        string = assemble_conllx_entry(index, word, pos, ner)
         print(string, file=conllx_handle)
     print('', file=conllx_handle)
     # pgr must have +1, cpr and tacred must not have +1
